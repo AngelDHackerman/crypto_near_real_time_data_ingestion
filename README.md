@@ -1,0 +1,1 @@
+EventBridge + Lambda + S3 + Athena + IAM + CloudWatch
