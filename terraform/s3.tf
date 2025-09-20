@@ -19,3 +19,14 @@ resource "aws_s3_bucket" "lake_curated_data" {
     Project     = "Crypto Near Real Time Data Ingestion"
   }
 }
+
+resource "aws_s3_bucket" "artifacts-crypto" {
+  bucket = "artifacts-crypto-data-${var.environment}"
+
+  tags = {
+    Name        = "artifacts-crypto-data-${var.environment}"
+    Environment = var.environment
+    Owner       = "Angel Hackerman"
+    Project     = "Crypto Near Real Time Data Ingestion"
+  }
+}
