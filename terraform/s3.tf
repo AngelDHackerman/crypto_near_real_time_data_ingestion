@@ -72,6 +72,46 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "lake_curated_data
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "lake_curated_data" {
+  bucket = aws_s3_bucket.lake_curated_data.id
+
+  # Rule JUST for the Silver prefix
+  rule {
+    id        = "silver-to-onezone-ia"
+    status    = "Enabled"
+
+    filter {
+      prefix = "top10/silver/"
+    }
+
+    transition {
+      days            = 90
+      storage_class   = "ONEZONE_IA"
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 180
+    }
+  }
+
+  # Gold: without transition (it will stay in Standard tier)
+  rule {
+    id        = "gold-keep-standard"
+    status    = "Enabled"
+    filter {
+      prefix = "top10/gold/"
+    }
+    # clean multipart 
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 # --- ARTIFACTS ---
 resource "aws_s3_bucket" "artifacts-crypto" {
   bucket = "artifacts-crypto-data-${var.environment}"
@@ -95,6 +135,5 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts-crypto"
     apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
   }
 }
-
 
 
