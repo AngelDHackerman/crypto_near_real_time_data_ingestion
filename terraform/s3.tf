@@ -57,3 +57,15 @@ resource "aws_s3_bucket" "artifacts-crypto" {
     Project     = "Crypto Near Real Time Data Ingestion"
   }
 }
+
+resource "aws_s3_bucket_versioning" "artifacts-crypto" {
+  bucket = aws_s3_bucket.artifacts-crypto.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts-crypto" {
+  bucket = aws_s3_bucket.artifacts-crypto.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+  }
+}
