@@ -34,6 +34,18 @@ resource "aws_s3_bucket" "lake_curated_data" {
   }
 }
 
+resource "aws_s3_bucket_versioning" "lake_curated_data" {
+  bucket = aws_s3_bucket.lake_curated_data.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "lake_curated_data" {
+  bucket = aws_s3_bucket.lake_curated_data.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+  }
+}
+
 # --- ARTIFACTS ---
 resource "aws_s3_bucket" "artifacts-crypto" {
   bucket = "artifacts-crypto-data-${var.environment}"
