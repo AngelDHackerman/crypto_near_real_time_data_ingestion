@@ -8,3 +8,14 @@ resource "aws_s3_bucket" "lake_raw_data" {
     Project     = "Crypto Near Real Time Data Ingestion"
   }
 }
+
+resource "aws_s3_bucket" "lake_curated_data" {
+  bucket = "lake-curated-data-silver-gold-${var.environment}"
+
+  tags = {
+    Name        = "lake-curated-data-silver-gold-${var.environment}"
+    Environment = var.environment
+    Owner       = "Angel Hackerman"
+    Project     = "Crypto Near Real Time Data Ingestion"
+  }
+}
