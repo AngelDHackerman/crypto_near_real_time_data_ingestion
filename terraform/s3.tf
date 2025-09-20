@@ -136,4 +136,22 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts-crypto"
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts-crypto.id
+
+  rule {
+    id      = "expire-old-artifacts"
+    status  = "Enabled"
+    filter {
+      prefix = ""  # applies to all the bucket
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
 
