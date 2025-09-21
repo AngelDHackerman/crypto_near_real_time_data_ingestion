@@ -9,7 +9,7 @@ resource "aws_lambda_function" "fetch_top10_crypto" {
       RAW_BUCKET    = var.bucket_lake_raw_name
       BRONZE_PREFIX = var.bronze_prefix
       SECRET_ARN    = var.secrets_manager_arn
-      TOP_LIST      = join(",", var.top10_list)
+      TOP_LIST_ID      = join(",", var.top10_list_id)
     }
   }
 }
