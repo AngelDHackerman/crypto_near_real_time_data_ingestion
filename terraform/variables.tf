@@ -22,3 +22,7 @@ variable "bronze_prefix" {
   description = "prefix for bronze data"  
   type = string
 }
+variable "top10_list" {
+  description = "An array of coins I want to record"
+  type = list(string)
+}
