@@ -1,6 +1,5 @@
 import os, json,hashlib, time, datetime, urllib.parse, urllib.request
 from botocore.exceptions import ClientError
-import uuid
 import boto3
 
 s3 = boto3.client("s3")
