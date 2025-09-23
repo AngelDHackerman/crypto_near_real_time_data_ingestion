@@ -1,5 +1,6 @@
 import os, json,hashlib, time, datetime, urllib.parse, urllib.request
 from botocore.exceptions import ClientError
+import uuid
 import boto3
 
 s3 = boto3.client("s3")
@@ -82,6 +83,33 @@ def handler(event, context):
         )
         written.append(key)
         print(f"[INFO] wrote {key}")
+        
+    # 3) Manifest: records what IDs were saved
+    dt = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc)
+    y, m, d, h = dt.year, f"{dt.month:02d}", f"{dt.day:02d}", f"{dt.hour:02d}"
+    
+    manifest_key=f"{BRONZE_PREFIX}/manifests/year={y}/month={m}/day={d}/hour={h}/{now}.json"
+    manifest = {
+        "ts_epoch": now,
+        "ids_requested": TOP_LIST_ID,
+        "written": written,
+        "missing": missing,
+    }
+    s3.put_object(
+        Bucket=RAW_BUCKET,
+        Key=manifest_key,
+        Body=json.dumps(manifest, separators=(",",":")).encode("utf-8"),
+        ContentType="application/json",
+    )
+    
+    # 4) Status object. Diagnost of API rates, errors and timestamp from CMC
+    status = resp.get("status", {})
+    s3.put_object(
+        Bucket=RAW_BUCKET,
+        Key=f"{BRONZE_PREFIX}/status/year={y}/month={m}/day={d}/hour={h}/{now}.json",
+        Body=json.dumps(status, separators=(",",":")).encode("utf-8"),
+        ContentType="application/json",
+    )
         
     result = {"Written": written}
     if missing:
