@@ -51,3 +51,33 @@ resource "aws_iam_role_policy_attachment" "lambda_s3_rw_attach" {
   role        = aws_iam_role.lambda_role.name
   policy_arn  = aws_iam_policy.lambda_s3_rw_bronze.arn
 }
+
+# Access to Secrets Manager from Lambda
+data "aws_secretsmanager_secret" "crypto" {
+  name = "near_real_time_crypto_ingestion_secrets"
+}
+
+resource "aws_iam_policy" "lambda_read_secret" {
+  name        = "lambda-read-crypto-secret"
+  description = "Allow lambda to read the crypto secret"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid      = "ReadSecret",
+        Effect   = "Allow",
+        Action   = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ],
+        Resource = data.aws_secretsmanager_secret.crypto.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_lambda_read_secret" {
+  role        = aws_iam_role.lambda_role.name
+  policy_arn  = aws_iam_policy.lambda_read_secret.arn
+}
