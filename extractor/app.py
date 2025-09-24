@@ -87,7 +87,7 @@ def handler(event, context):
     dt = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc)
     y, m, d, h = dt.year, f"{dt.month:02d}", f"{dt.day:02d}", f"{dt.hour:02d}"
     
-    manifest_key=f"{BRONZE_PREFIX}/manifests/year={y}/month={m}/day={d}/hour={h}/{now}.json"
+    manifest_key=f"{BRONZE_PREFIX}/manifests/year={y}/month={m}/day={d}/hour={h}/{now}-manifest.json"
     manifest = {
         "ts_epoch": now,
         "ids_requested": TOP_LIST_ID,
@@ -105,7 +105,7 @@ def handler(event, context):
     status = resp.get("status", {})
     s3.put_object(
         Bucket=RAW_BUCKET,
-        Key=f"{BRONZE_PREFIX}/status/year={y}/month={m}/day={d}/hour={h}/{now}.json",
+        Key=f"{BRONZE_PREFIX}/status/year={y}/month={m}/day={d}/hour={h}/{now}-status.json",
         Body=json.dumps(status, separators=(",",":")).encode("utf-8"),
         ContentType="application/json",
     )

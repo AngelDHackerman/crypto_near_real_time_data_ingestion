@@ -30,3 +30,14 @@ variable "top10_list_id" {
   description = "Id of the coins to record"
   type = list(number)
 }
+variable "eventbridge_schedule_expression" {
+  description = "Cron expression to trigger ETL/Lambda"
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "eventbridge_rule_enabled" {
+  description = "Enable/Disable EventBridge rule"
+  type        = bool
+  default     = true
+}
