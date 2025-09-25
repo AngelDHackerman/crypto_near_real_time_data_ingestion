@@ -41,3 +41,23 @@ variable "eventbridge_rule_enabled" {
   type        = bool
   default     = true
 }
+
+variable "bucket_silver_gold_name" {
+  description = "Bucket for the silver/gold data"
+  type = string
+}
+
+variable "bucket_artifacts_name" {
+  description = "code for glue job"
+  type = string
+}
+
+variable "silver_prefix" {
+  description = "prefix for silver data"
+  type = string
+}
+
+variable "gold_prefix" {
+  description = "prefix for gold data"
+  type = string
+}
