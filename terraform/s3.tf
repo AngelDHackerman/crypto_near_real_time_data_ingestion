@@ -155,3 +155,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
   }
 }
 
+# Upload silver glue job de to S3
+resource "aws_s3_object" "silver_glue_script" {
+  bucket       = var.bucket_artifacts_name
+  key          = "jobs/silver_glue_job.py"          # must match script_location
+  source       = "../glue_jobs_silver_gold/silver/silver_glue_job.py" # ruta local en tu repo/TF module
+  etag         = filemd5("../glue_jobs_silver_gold/silver/silver_glue_job.py")
+  content_type = "text/x-python"
+  server_side_encryption = "AES256"
+}

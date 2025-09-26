@@ -38,6 +38,7 @@ def _s3_key(coin_id, ts_epoch, payload_bytes):
     y, m, d, h = dt.year, f"{dt.month:02d}", f"{dt.day:02d}", f"{dt.hour:02d}"
     sha = hashlib.sha1(payload_bytes).hexdigest()
     # Partitions by id, year, month, day, hour
+    # partition ID is first just for better visualization, this is just a "landing" bucket partition
     return f"{BRONZE_PREFIX}/id={coin_id}/year={y}/month={m}/day={d}/hour={h}/part-{ts_epoch}-{sha}.json"
         
 def handler(event, context):
