@@ -57,3 +57,17 @@ Normalize types directly in the **Lambda Extractor** before writing to S3.
 
 ---
 
+### 4. Avoiding the Small Files Problem
+**Challenge:**  
+Without care, each asset/hour combination could generate a separate Parquet file. This would lead to thousands of very small files, slowing down Athena and increasing query costs.
+
+**Solution:**  
+Repartition the Silver output by `y/m/d/h` (and optionally `asset_id`) so that **all 11 assets for the same hour are written into a single Parquet file**.
+
+**Impact:**  
+- Prevented the *small files problem*.  
+- Reduced the number of files scanned per query.  
+- Lowered costs and improved performance for downstream analytics.  
+
+---
+
