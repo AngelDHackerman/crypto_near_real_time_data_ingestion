@@ -71,3 +71,8 @@ Repartition the Silver output by `y/m/d/h` (and optionally `asset_id`) so that *
 
 ---
 
+### 📌 Lessons Learned
+- **Design partitions with consumers in mind**: in Raw we optimize for asset isolation, in Silver we optimize for time-based analytics.  
+- **Normalize early**: cleaning types at ingestion time prevents schema chaos later.  
+- **Document decisions**: each technical challenge turned into a learning milestone.  
+- **Think about file sizes**: grouping multiple assets per hour avoids small files, improving query performance and cost efficiency.  
