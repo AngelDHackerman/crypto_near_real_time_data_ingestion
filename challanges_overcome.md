@@ -17,5 +17,22 @@ Partition the raw data by `id` first and then by `year/month/day/hour`:
 
 ---
 
+### 2. Silver Partitioning Strategy (Date → ID)
+**Challenge:**  
+In the Silver layer, the focus is on analytical queries (Athena, QuickSight). Keeping the raw-style partitioning (`id → date`) made time-based queries inefficient.
+
+**Solution:**  
+Partition Silver first by `date` (`y/m/d/h`) and then optionally by `asset_id`:
+
+`s3://.../silver/year=2025/month=09/day=28/hour=03/asset_id=1/part-*.parquet`
+
+
+**Impact:**  
+- Faster time-range queries (the most common in financial analytics).  
+- Maintained flexibility to filter by asset if needed.  
+- Turned the Silver layer into an analytics-optimized data lake.  
+
+---
+
 
 
