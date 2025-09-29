@@ -71,6 +71,19 @@ Repartition the Silver output by `y/m/d/h` (and optionally `asset_id`) so that *
 
 ---
 
+### 5. Manifest and Status Folders in RAW
+**Challenge:**  
+Our ingestion Lambda also stored `manifest/` (list of ingested IDs) and `status/` (API diagnostics) objects in the same Raw bucket.  
+Initially, the Glue Silver job tried to parse these files as if they were asset JSON, which caused schema mismatches, missing fields, and spurious rows.
+
+**Solution:**  
+Exclude these folders explicitly in the Glue job’s read options:
+```python
+"exclusions": ["**/manifests/**", "**/status/**"]
+```
+
+---
+
 ### 📌 Lessons Learned
 - **Design partitions with consumers in mind**: in Raw we optimize for asset isolation, in Silver we optimize for time-based analytics.  
 - **Normalize early**: cleaning types at ingestion time prevents schema chaos later.  

@@ -1,5 +1,10 @@
 EventBridge + Lambda + S3 + Athena + IAM + CloudWatch & Terraform
 
+This is a **datalake medallion architecture**
+
+las particiones son por hora de ingesta, no por hora de origen
+
+
 [crypto price endpoint](https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest)
 
 
