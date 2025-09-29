@@ -61,3 +61,24 @@ variable "gold_prefix" {
   description = "prefix for gold data"
   type = string
 }
+
+variable "project" {
+  description = "Project tag/name"
+  type        = string
+  default     = "near-real-time-crypto"
+}
+
+variable "crawler_schedule_cron" {
+  description = "Schedule for Glue Crawlers (cron in UTC)"
+  type        = string
+  default     = "cron(0/15 * * * ? *)" # cada 15 minutos
+}
+
+variable "tags" {
+  description = "Common tags"
+  type        = map(string)
+  default     = {
+    Owner   = "angel"
+    Purpose = "crypto-near-rt"
+  }
+}
