@@ -34,5 +34,26 @@ Partition Silver first by `date` (`y/m/d/h`) and then optionally by `asset_id`:
 
 ---
 
+### 3. Data Normalization in RAW (Union Types Problem)
+**Challenge:**  
+The CoinMarketCap API sometimes returns the same field with different types across calls. For example:  
 
+- `fully_diluted_market_cap` as `long` in some responses, `double` in others.  
+
+- Glue/Spark inferred this as a **union struct** (`struct<double:double, long:bigint>`), which caused runtime errors such as:  
+
+`AnalysisException: need struct type but got double`
+
+
+**Solution:**  
+Normalize types directly in the **Lambda Extractor** before writing to S3.  
+- Implemented `_normalize_coin_types` to force all numeric metrics (`price`, `market_cap`, `supplies`, etc.) to **float**.  
+- Ensured consistent schema across all assets and all files.
+
+**Impact:**  
+- Simplified and stabilized the Silver Glue job (fewer fallbacks needed).  
+- Removed `NaN` issues and union-related errors.  
+- Produced homogeneous data, ready for ML, Athena, and QuickSight.  
+
+---
 
