@@ -50,37 +50,33 @@ data "aws_iam_policy_document" "glue_crawler_policy" {
     ]
   }
 
-  # Glue Catalog actions - prefer to restrict resources to Glue ARNs if you have region/account/database values
+  # Glue Catalog actions - restrict
   statement {
     sid = "GlueCatalogAccess"
     actions = [
       "glue:GetDatabase",
       "glue:GetDatabases",
-      "glue:CreateDatabase",
+      "glue:CreateDatabase"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "GlueCatalogAccessTables"
+    actions = [
       "glue:GetTable",
       "glue:GetTables",
       "glue:CreateTable",
       "glue:UpdateTable",
-      "glue:DeleteTable",
-      "glue:GetCrawler",
-      "glue:CreateCrawler",
-      "glue:UpdateCrawler",
-      "glue:StartCrawler",
-      "glue:StopCrawler"
+      "glue:DeleteTable"
     ]
-    # Use specific ARNs instead of "*" when you can:
     resources = ["*"]
   }
 
-  # CloudWatch logs (managed policy often covers this, but safe to include)
+  # CloudWatch logs
   statement {
-    sid = "CWLogs"
-    actions = [
-      "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:PutLogEvents",
-      "logs:DescribeLogStreams"
-    ]
+    sid     = "CWLogs"
+    actions = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents","logs:DescribeLogStreams"]
     resources = ["*"]
   }
 }
