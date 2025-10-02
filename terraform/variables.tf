@@ -76,3 +76,8 @@ variable "tags" {
     Purpose = "crypto-near-rt"
   }
 }
+
+variable "athena_results_prefix" {
+  description = "output bucket prefix"
+  type = string
+}
