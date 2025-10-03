@@ -64,3 +64,11 @@ df = df.filter(
     F.col("price_usd").isNotNull() & (F.col("price_usd") > 0)
 )
 
+# -------- Deduplication: (asset_id, event_time_utc) -> last by ingestion_ts_utc --------
+w = Window.partitionBy("asset_id", "event_time_utc").orderBy(F.col("ingestion_ts_utc").desc_nulls_last())
+df = (
+    df.withColumn("rk", F.row_number().over(w))
+      .filter(F.col("rk") == 1)
+      .drop("rk")
+)
+
