@@ -81,3 +81,15 @@ variable "athena_results_prefix" {
   description = "output bucket prefix"
   type = string
 }
+variable "gold_feature_prefix" {
+  description = "feature base for gold data"
+  type = string
+}
+variable "gold_ml_prefix" {
+  description = "prefix for Machine learning training data"
+  type = string
+}
+variable "gold_ohlcv_prefix" {
+  description = "prefix for OHLCV"
+  type = string
+}
