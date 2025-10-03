@@ -119,4 +119,18 @@ cols_final = [
 
 df_out = df.select(*cols_final, "dt", "asset_id")  # dt/asset_id will be used for partitionBy
 
+# -------- Write: Parquet + Snappy + Dynamic Overwrite --------
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
+(
+    df_out
+    .repartition("dt","asset_id")  # controls the number of files per partition
+    .write
+    .mode("overwrite")             # rewrites only touched partitions
+    .format("parquet")
+    .option("compression", "snappy")
+    .partitionBy("dt","asset_id")
+    .save(gold_path)
+)
+
+job.commit()
