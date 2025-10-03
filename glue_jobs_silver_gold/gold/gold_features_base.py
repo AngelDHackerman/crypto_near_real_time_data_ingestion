@@ -57,3 +57,10 @@ df = (
     .withColumn("fully_diluted_market_cap", F.col("fully_diluted_market_cap").cast(T.DoubleType()))
 )
 
+# -------- Minum Quality --------
+df = df.filter(
+    F.col("event_time_utc").isNotNull() &
+    F.col("asset_id").isNotNull() &
+    F.col("price_usd").isNotNull() & (F.col("price_usd") > 0)
+)
+
