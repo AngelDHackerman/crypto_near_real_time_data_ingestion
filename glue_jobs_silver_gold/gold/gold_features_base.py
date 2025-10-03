@@ -75,7 +75,7 @@ df = (
 # -------- Derive recommended partition (simple and efficient) --------
 df = df.withColumn("dt", F.to_date("event_time_utc"))  
 
-# -------- Light Derivatives (turnover 24h, market cap check) --------
+# -------- Light Derivatives (turnover 24h check, market cap check) --------
 df = (
     df
     # Qué % representa el turnover de 24h relativo al free float
@@ -89,3 +89,34 @@ df = (
                        (F.abs(F.col("market_cap") - F.col("market_cap_check")) / F.col("market_cap")))
                 )
 )
+
+# -------- Final Selection --------
+cols_final = [
+    "asset_id",
+    "event_time_utc",
+    "symbol",
+    "name",
+    "source",
+    "ingestion_ts_utc",
+    "price_usd",
+    "market_cap",
+    "market_cap_dominance",
+    "fully_diluted_market_cap",
+    "circulating_supply",
+    "max_supply",
+    "volume_24h",
+    "volume_change_24h",
+    "pct_change_1h",
+    "pct_change_24h",
+    "pct_change_7d",
+    "pct_change_30d",
+    "pct_change_60d",
+    "pct_change_90d",
+    # light derivatives
+    "turnover_24h",
+    "market_cap_check_gap_pct"
+]
+
+df_out = df.select(*cols_final, "dt", "asset_id")  # dt/asset_id will be used for partitionBy
+
+
