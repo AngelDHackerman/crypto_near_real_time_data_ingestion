@@ -72,3 +72,20 @@ df = (
       .drop("rk")
 )
 
+# -------- Derive recommended partition (simple and efficient) --------
+df = df.withColumn("dt", F.to_date("event_time_utc"))  
+
+# -------- Light Derivatives (turnover 24h, market cap check) --------
+df = (
+    df
+    # Qué % representa el turnover de 24h relativo al free float
+    .withColumn("turnover_24h",
+                F.when(F.col("circulating_supply") > 0, F.col("volume_24h") / F.col("circulating_supply")))
+    # Gap relativo entre market_cap reportado y el calculado por price * circulating_supply
+    .withColumn("market_cap_check",
+                F.when(F.col("circulating_supply").isNotNull(), F.col("price_usd") * F.col("circulating_supply")))
+    .withColumn("market_cap_check_gap_pct",
+                F.when((F.col("market_cap").isNotNull()) & (F.col("market_cap") > 0),
+                       (F.abs(F.col("market_cap") - F.col("market_cap_check")) / F.col("market_cap")))
+                )
+)
