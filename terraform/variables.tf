@@ -93,3 +93,26 @@ variable "gold_ohlcv_prefix" {
   description = "prefix for OHLCV"
   type = string
 }
+
+variable "gold_job_name" {
+  type        = string
+  default     = "gold-features-base"
+}
+variable "glue_version" {
+  type        = string
+  default     = "4.0" # cámbialo a "5.0" si usas Glue 5
+}
+variable "glue_worker_type" {
+  type        = string
+  default     = "G.1X"
+}
+variable "glue_number_of_workers" {
+  type        = number
+  default     = 2
+}
+
+# Prefijos para Spark UI y TempDir dentro del bucket GOLD
+variable "gold_spark_ui_prefix" {
+  type        = string
+  default     = "top10/_spark_ui/gold_features_base"
+}
