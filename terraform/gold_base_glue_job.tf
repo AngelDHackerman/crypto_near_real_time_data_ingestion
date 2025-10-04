@@ -14,7 +14,7 @@ resource "aws_glue_job" "gold_features_base" {
   command {
     name                = "glueetl"
     python_version      = "3"
-    script_location     = "s3://${var.bucket_artifacts_name}/jobs/gold_features_base.py"
+    script_location     = "s3://${var.bucket_artifacts_name}/jobs/gold_features_base_job.py"
   }
 
   # Pass the parameters required by gold_features_base.py 
