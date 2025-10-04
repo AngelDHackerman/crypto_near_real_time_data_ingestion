@@ -51,7 +51,7 @@ resource "aws_glue_crawler" "silver_crawler" {
   tags = var.tags
 }
 
-# Crawler for Gold 
+# Crawler for Gold Features Base
 resource "aws_glue_crawler" "gold_crawler" {
   name            = "${var.project}-gold-feature-base-crawler-${var.environment}"
   role            = aws_iam_role.glue_crawler_role.arn
