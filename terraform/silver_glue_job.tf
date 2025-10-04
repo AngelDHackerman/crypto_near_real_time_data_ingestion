@@ -4,11 +4,13 @@ resource "aws_glue_job" "silver_job" {
   glue_version          = "4.0"
   number_of_workers     = 2
   worker_type           = "G.1X"
+  max_retries           = 1
+  timeout               = 30
 
   command {
-    name = "glueetl"
+    name            = "glueetl"
     script_location = "s3://${var.bucket_artifacts_name}/jobs/silver_glue_job.py"
-    python_version = "3"
+    python_version  = "3"
   }
 
   default_arguments = {
