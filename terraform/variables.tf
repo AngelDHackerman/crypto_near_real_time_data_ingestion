@@ -81,7 +81,7 @@ variable "athena_results_prefix" {
   description = "output bucket prefix"
   type = string
 }
-variable "gold_feature_prefix" {
+variable "gold_features_prefix" {
   description = "feature base for gold data"
   type = string
 }

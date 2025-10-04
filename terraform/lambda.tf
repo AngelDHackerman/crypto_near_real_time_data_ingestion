@@ -1,7 +1,7 @@
 data "archive_file" "lambda_zip" {
   type    = "zip"
-  source_file = "../extractor/app.py"
-  output_path = "../extractor/build/fetch_top10.zip"
+  source_file = "../extractor_bronze_lambda/app.py"
+  output_path = "../extractor_bronze_lambda/build/fetch_top10.zip"
 }
 
 
