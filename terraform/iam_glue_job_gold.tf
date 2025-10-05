@@ -14,40 +14,33 @@ data "aws_iam_policy_document" "glue_gold_assume" {
 }
 
 resource "aws_iam_role" "glue_gold_base" {
-  name                = "${var.project}-glue-gold-role"
-  assume_role_policy  = data.aws_iam_policy_document.glue_gold_assume.json
-  tags                = var.tags
+  name               = "${var.project}-glue-gold-role"
+  assume_role_policy = data.aws_iam_policy_document.glue_gold_assume.json
+  tags               = var.tags
 }
 
-# Minimum policy:
-# ​​- Read script in artifacts
-# - Read Silver (parquet) under ${var.silver_prefix}
-# - Write Gold features under ${var.gold_features_prefix}
-# - Logs to CloudWatch
-
+# Política del job:
+# - ListBucket sin condición para artifacts y data
+# - Leer script del job en artifacts/jobs/*
+# - Leer Parquet en silver (top10/silver/*)
+# - Escribir en gold (prefijo padre y subcarpetas), incluidos marcadores $folder$, _SUCCESS, _temporary
+# - Logs en CloudWatch
 data "aws_iam_policy_document" "glue_gold_policy" {
-  # List buckets by prefix (artifacts and data)
+
+  # ---- S3: List buckets (sin condición) ----
   statement {
-    sid     = "S3ListArtifactsAndDataByPrefix"
+    sid     = "S3ListDataBucket"
     actions = ["s3:ListBucket", "s3:GetBucketLocation"]
-    resources = [
-      "arn:aws:s3:::${var.bucket_artifacts_name}",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}",
-    ]
-    condition {
-      test     = "StringLike"
-      variable = "s3:prefix"
-      values = [
-        "${var.project}/glue/*",
-        "${var.silver_prefix}/",
-        "${var.silver_prefix}/*",
-        "${var.gold_features_prefix}/",
-        "${var.gold_features_prefix}/*",
-      ]
-    }
+    resources = ["arn:aws:s3:::${var.bucket_silver_gold_name}"]
   }
 
-  # Read .py script from artifacts
+  statement {
+    sid     = "S3ListArtifactsBucket"
+    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
+    resources = ["arn:aws:s3:::${var.bucket_artifacts_name}"]
+  }
+
+  # ---- Artifacts: leer script del job ----
   statement {
     sid     = "S3GetArtifactsScript"
     actions = ["s3:GetObject"]
@@ -56,7 +49,7 @@ data "aws_iam_policy_document" "glue_gold_policy" {
     ]
   }
 
-  # Read Silver Parquet
+  # ---- Silver: lectura de Parquet ----
   statement {
     sid     = "S3ReadSilver"
     actions = ["s3:GetObject"]
@@ -65,20 +58,29 @@ data "aws_iam_policy_document" "glue_gold_policy" {
     ]
   }
 
-  # Write/update Gold Features partitions (dynamic job overwrite) :contentReference[oaicite:3]{index=3}
+  # ---- Gold: escritura (prefijo padre + subcarpetas) ----
+  # Cubre marcadores $folder$, _SUCCESS, _temporary, etc.
   statement {
-    sid     = "S3WriteGoldFeatures"
+    sid     = "S3WriteGoldArea"
     actions = [
-      "s3:PutObject", 
-      "s3:DeleteObject", 
+      "s3:PutObject",
+      "s3:DeleteObject",
       "s3:AbortMultipartUpload"
     ]
     resources = [
+      # Prefijo padre (top10/gold)
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}",
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}_$folder$",
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}/*",
+
+      # (Opcional/explicativo) subprefijo específico de features_base
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}",
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}_$folder$",
       "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}/*"
     ]
   }
 
-  # Logs Glue → CloudWatch
+  # ---- Logs Glue → CloudWatch ----
   statement {
     sid     = "CloudWatchLogs"
     actions = [

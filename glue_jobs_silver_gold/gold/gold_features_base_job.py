@@ -12,8 +12,8 @@ args = getResolvedOptions(sys.argv, [
     "SILVER_BUCKET",
     "SILVER_PREFIX",
     "GOLD_BUCKET",
-    "GOLD_FEATURES_PREFIX",
-    "PROCESS_FROM"
+    "GOLD_FEATURES_PREFIX"
+    # "PROCESS_FROM"
 ])
 
 sc = SparkContext()
@@ -29,8 +29,8 @@ gold_path   = f"s3://{args['GOLD_BUCKET']}/{args['GOLD_FEATURES_PREFIX'].rstrip(
 df = spark.read.parquet(silver_path)
 
 # Procesamiento incremental (opcional)
-if args.get("PROCESS_FROM"):
-    df = df.filter(F.to_date("event_time_utc") >= F.to_date(F.lit(args["PROCESS_FROM"])))
+# if args.get("PROCESS_FROM"):
+#     df = df.filter(F.to_date("event_time_utc") >= F.to_date(F.lit(args["PROCESS_FROM"])))
     
 # -------- Explicit Cast --------
 df = (
@@ -117,7 +117,7 @@ cols_final = [
     "market_cap_check_gap_pct"
 ]
 
-df_out = df.select(*cols_final, "dt", "asset_id")  # dt/asset_id will be used for partitionBy
+df_out = df.select(*cols_final, "dt")  # dt will be used for partitionBy
 
 # -------- Write: Parquet + Snappy + Dynamic Overwrite --------
 spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
