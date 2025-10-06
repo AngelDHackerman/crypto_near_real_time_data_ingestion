@@ -99,3 +99,11 @@ df = (df
     .withColumn("vol_14d", roll_std(F.col("ret_1d"), 14))
     .withColumn("vol_30d", roll_std(F.col("ret_1d"), 30))
 )
+
+# Volume features
+df = (df
+    .withColumn("vol_chg_1d", F.col("volume_24h") - F.lag("volume_24h", 1).over(w_time))
+    .withColumn("vol_mean_14", roll_avg(F.col("volume_24h"), 14))
+    .withColumn("vol_std_14",  roll_std(F.col("volume_24h"), 14))
+    .withColumn("vol_z_14d",   safe_div(F.col("volume_24h") - F.col("vol_mean_14"), F.col("vol_std_14")))
+)
