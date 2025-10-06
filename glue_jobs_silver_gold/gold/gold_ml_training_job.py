@@ -107,3 +107,34 @@ df = (df
     .withColumn("vol_std_14",  roll_std(F.col("volume_24h"), 14))
     .withColumn("vol_z_14d",   safe_div(F.col("volume_24h") - F.col("vol_mean_14"), F.col("vol_std_14")))
 )
+
+# Market cap & dominance dynamics
+df = (df
+    .withColumn("mcap_chg_1d",     F.col("market_cap") - F.lag("market_cap", 1).over(w_time))
+    .withColumn("mcap_dom_chg_1d", F.col("market_cap_dominance") - F.lag("market_cap_dominance", 1).over(w_time))
+    .withColumn("supply_utilization", safe_div(F.col("circulating_supply"), F.col("max_supply")))
+)
+
+# Cross-sectional factors (per-day)
+# market return (cap-weighted) and BTC return
+mkt = (df.groupBy("dt")
+         .agg((F.sum(F.col("market_cap") * F.col("ret_1d")) / F.sum("market_cap")).alias("ret_mkt_1d")))
+
+btc = (df.filter(F.upper(F.col("symbol")) == F.lit("BTC"))
+         .select("dt", F.col("ret_1d").alias("ret_btc_1d")))
+
+df = df.join(mkt, "dt", "left").join(btc, "dt", "left")
+
+# Ranks within day (descending)
+w_day_mcap = W.partitionBy("dt").orderBy(F.desc_nulls_last("market_cap"))
+w_day_mom7 = W.partitionBy("dt").orderBy(F.desc_nulls_last("ret_7d"))
+df = (df
+    .withColumn("rank_mcap", F.dense_rank().over(w_day_mcap))
+    .withColumn("rank_momentum_7d", F.dense_rank().over(w_day_mom7))
+)
+
+# Calendar
+df = (df
+    .withColumn("dow", F.dayofweek("dt").cast("tinyint"))
+    .withColumn("is_month_end", (F.last_day("dt") == F.col("dt")).cast("boolean"))
+)
