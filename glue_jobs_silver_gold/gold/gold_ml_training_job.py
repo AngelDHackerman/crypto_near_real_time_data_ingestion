@@ -64,3 +64,10 @@ def log_ret(col_name: str, n: int):
 def roll_avg(col, n):
     """trailing mean over last n rows excluding current (t-1 … t-n)."""
     return F.avg(col).over(w_time.rowsBetween(-n, -1))
+
+def roll_std(col, n):
+    """trailing std over last n rows excluding current (t-1 … t-n)."""
+    return F.stddev_samp(col).over(w_time.rowsBetween(-n, -1))
+
+def safe_div(num, den):
+    return F.when(den.isNull() | (den == 0), F.lit(None)).otherwise(num / den)
