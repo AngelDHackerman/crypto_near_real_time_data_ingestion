@@ -138,3 +138,9 @@ df = (df
     .withColumn("dow", F.dayofweek("dt").cast("tinyint"))
     .withColumn("is_month_end", (F.last_day("dt") == F.col("dt")).cast("boolean"))
 )
+
+# Quality flags (missingness over trailing windows)
+df = (df
+    .withColumn("missing_7d",  F.sum(F.col("price_usd").isNull().cast("int")).over(w_time.rowsBetween(-7, -1)))
+    .withColumn("missing_30d", F.sum(F.col("price_usd").isNull().cast("int")).over(w_time.rowsBetween(-30, -1)))
+)
