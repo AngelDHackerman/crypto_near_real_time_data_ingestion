@@ -84,3 +84,18 @@ df = (df
     .withColumn("ret_14d", log_ret("price_usd", 14))
     .withColumn("ret_30d", log_ret("price_usd", 30))
 )
+
+# SMA ratios (momentum proxy)
+df = (df
+    .withColumn("sma_5",  roll_avg(F.col("price_usd"), 5))
+    .withColumn("sma_20", roll_avg(F.col("price_usd"), 20))
+    .withColumn("sma_5_over_20", safe_div(F.col("sma_5"), F.col("sma_20")))
+)
+
+# Volatility (stdev of daily log returns)
+df = (df
+    .withColumn("vol_3d",  roll_std(F.col("ret_1d"), 3))
+    .withColumn("vol_7d",  roll_std(F.col("ret_1d"), 7))
+    .withColumn("vol_14d", roll_std(F.col("ret_1d"), 14))
+    .withColumn("vol_30d", roll_std(F.col("ret_1d"), 30))
+)
