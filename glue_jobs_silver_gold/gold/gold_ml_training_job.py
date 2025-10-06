@@ -71,3 +71,16 @@ def roll_std(col, n):
 
 def safe_div(num, den):
     return F.when(den.isNull() | (den == 0), F.lit(None)).otherwise(num / den)
+
+# -----------------------------
+# Core Features
+# -----------------------------
+
+# Returns (log)
+df = (df
+    .withColumn("ret_1d",  log_ret("price_usd", 1))
+    .withColumn("ret_3d",  log_ret("price_usd", 3))
+    .withColumn("ret_7d",  log_ret("price_usd", 7))
+    .withColumn("ret_14d", log_ret("price_usd", 14))
+    .withColumn("ret_30d", log_ret("price_usd", 30))
+)
