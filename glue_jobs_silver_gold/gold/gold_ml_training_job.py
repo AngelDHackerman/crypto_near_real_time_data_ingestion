@@ -144,3 +144,51 @@ df = (df
     .withColumn("missing_7d",  F.sum(F.col("price_usd").isNull().cast("int")).over(w_time.rowsBetween(-7, -1)))
     .withColumn("missing_30d", F.sum(F.col("price_usd").isNull().cast("int")).over(w_time.rowsBetween(-30, -1)))
 )
+
+# -----------------------------
+# Targets (forward shift; NO leakage)
+# -----------------------------
+df = (df
+    .withColumn("price_fwd1", F.lead("price_usd", 1).over(w_time))
+    .withColumn("y_ret_1d_fwd", F.when(F.col("price_fwd1").isNotNull() & (F.col("price_usd") != 0),
+                                       F.log(F.col("price_fwd1") / F.col("price_usd"))))
+    .withColumn("y_up_1d_2pct", F.when(F.col("price_fwd1").isNotNull() & F.col("price_usd").isNotNull(),
+                                       (F.col("price_fwd1") >= F.col("price_usd") * F.lit(1.02))).otherwise(None).cast("int"))
+)
+
+# -----------------------------
+# Select & Write
+# -----------------------------
+# Final column order (identity, targets, features, partitions last)
+final_cols = [
+    # identity
+    "symbol", "name",
+
+    # targets
+    "y_ret_1d_fwd", "y_up_1d_2pct",
+
+    # returns & momentum
+    "ret_1d", "ret_3d", "ret_7d", "ret_14d", "ret_30d",
+    "sma_5_over_20",
+
+    # volatility
+    "vol_3d", "vol_7d", "vol_14d", "vol_30d",
+
+    # volume & turnover
+    "volume_24h", "vol_chg_1d", "vol_z_14d", "turnover_24h",
+
+    # market cap & dominance
+    "market_cap", "market_cap_dominance", "mcap_chg_1d", "mcap_dom_chg_1d", "supply_utilization",
+
+    # cross-sectional factors
+    "ret_mkt_1d", "ret_btc_1d", "rank_mcap", "rank_momentum_7d",
+
+    # calendar
+    "dow", "is_month_end",
+
+    # quality
+    "missing_7d", "missing_30d",
+
+    # partitions (must be present as columns too)
+    "dt", "asset_id"
+]
