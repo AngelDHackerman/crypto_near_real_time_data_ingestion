@@ -122,6 +122,11 @@ df_out = df.select(*cols_final, "dt")  # dt will be used for partitionBy
 # -------- Write: Parquet + Snappy + Dynamic Overwrite --------
 spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
+# 🧹 Optional: prevent creation of directory markers (_$folder$)
+hconf = spark._jsc.hadoopConfiguration()
+hconf.set("fs.s3a.create.directory.marker", "false")
+hconf.set("fs.s3a.directory.marker.retention", "delete")
+
 (
     df_out
     .repartition("dt","asset_id")  # controls the number of files per partition
