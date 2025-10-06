@@ -192,3 +192,22 @@ final_cols = [
     # partitions (must be present as columns too)
     "dt", "asset_id"
 ]
+
+# Keep only columns that exist (defensive; in case some inputs are missing)
+existing = set(df.columns)
+final_cols = [c for c in final_cols if c in existing]
+
+df_out = df.select(*final_cols)
+
+# Repartition by partitions to control number of files per (dt, asset)
+(df_out
+    .repartition("dt", "asset_id")
+    .write
+    .mode("overwrite")
+    .format("parquet")
+    .option("compression", "snappy")
+    .partitionBy("dt", "asset_id")
+    .save(gold_ml_path)
+)
+
+job.commit()
