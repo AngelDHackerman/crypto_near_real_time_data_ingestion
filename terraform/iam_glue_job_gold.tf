@@ -43,6 +43,13 @@ data "aws_iam_policy_document" "glue_gold_policy" {
 
   # ---- Artifacts: escribir/borrar en TempDir ----
   statement {
+  sid     = "S3GetArtifactsScript"
+  actions = ["s3:GetObject"]
+  resources = [
+    "arn:aws:s3:::${var.bucket_artifacts_name}/jobs/*"
+  ]
+}
+  statement {
     sid     = "S3WriteArtifactsTempDir"
     actions = [
       "s3:PutObject",
