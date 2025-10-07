@@ -3,7 +3,7 @@
 #############################
 
 resource "aws_glue_job" "gold_features_base" {
-  name                  = "gold-features-cmc-${var.environment}"
+  name                  = "gold-base-features-cmc-${var.environment}"
   role_arn              = aws_iam_role.glue_gold_base.arn
   glue_version          = "4.0"
   number_of_workers     = 2
@@ -27,7 +27,7 @@ resource "aws_glue_job" "gold_features_base" {
     "--TempDir"                              = "s3://${var.bucket_artifacts_name}/tmp/"
 
     # Business Arguments
-    "--JOB_NAME"                = "gold-features-cmc-${var.environment}"
+    "--JOB_NAME"                = "gold-base-features-cmc-${var.environment}"
     "--SILVER_BUCKET"           = var.bucket_silver_gold_name
     "--SILVER_PREFIX"           = var.silver_prefix
     "--GOLD_BUCKET"             = var.bucket_silver_gold_name

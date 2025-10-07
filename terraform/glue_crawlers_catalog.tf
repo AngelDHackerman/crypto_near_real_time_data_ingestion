@@ -56,10 +56,10 @@ resource "aws_glue_crawler" "gold_crawler" {
   name            = "${var.project}-gold-feature-base-crawler-${var.environment}"
   role            = aws_iam_role.glue_crawler_role.arn
   database_name   = aws_glue_catalog_database.gold_db.name
-  table_prefix    = "features_"
+  table_prefix    = ""
 
   s3_target {
-    path        = "s3://${var.bucket_silver_gold_name}/${var.gold_features_prefix}/"
+    path        = "s3://${var.bucket_silver_gold_name}/top10/gold/gold_features_base/"
     exclusions  = [
       "**/manifest/**",
       "**/status/**",

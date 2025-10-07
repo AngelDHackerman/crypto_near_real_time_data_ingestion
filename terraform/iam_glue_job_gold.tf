@@ -73,10 +73,15 @@ data "aws_iam_policy_document" "glue_gold_policy" {
       "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}_$folder$",
       "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}/*",
 
-      # (Opcional/explicativo) subprefijo específico de features_base
+      # subprefijo específico de features_base
       "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}",
       "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}_$folder$",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}/*"
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}/*",
+
+      # subprefijo específico de ml_training
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_ml_prefix}",
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_ml_prefix}_$folder$",
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_ml_prefix}/*"
     ]
   }
 
