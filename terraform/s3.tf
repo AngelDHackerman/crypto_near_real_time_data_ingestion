@@ -174,3 +174,13 @@ resource "aws_s3_object" "gold_features_base_glue_script" {
   content_type            = "text/x-python"
   server_side_encryption  = "AES256"
 }
+
+# Upload gold features base glue job to S3
+resource "aws_s3_object" "gold_ml_training_glue_script" {
+  bucket                  = var.bucket_artifacts_name
+  key                     = "jobs/gold_ml_training_job.py"
+  source                  = "../glue_jobs_silver_gold/gold/gold_ml_training_job.py"
+  etag                    = filemd5("../glue_jobs_silver_gold/gold/gold_ml_training_job.py")
+  content_type            = "text/x-python"
+  server_side_encryption  = "AES256"
+}
