@@ -1,5 +1,5 @@
 ###########################################
-# IAM para Glue Job: Gold Features Base
+# IAM para Glue Job: Gold (Features Base + ML Training)
 ###########################################
 
 # Trust policy (Glue Service)
@@ -22,8 +22,9 @@ resource "aws_iam_role" "glue_gold_base" {
 # Política del job:
 # - ListBucket sin condición para artifacts y data
 # - Leer script del job en artifacts/jobs/*
-# - Leer Parquet en silver (top10/silver/*)
-# - Escribir en gold (prefijo padre y subcarpetas), incluidos marcadores $folder$, _SUCCESS, _temporary
+# - (NEW) Escribir y leer en artifacts/tmp/* (por --TempDir)
+# - Leer Parquet en GOLD_FEATURES_BASE (input del job ML)
+# - Escribir en GOLD (prefijo padre y subcarpetas: features_base y ml_training)
 # - Logs en CloudWatch
 data "aws_iam_policy_document" "glue_gold_policy" {
 
@@ -40,21 +41,35 @@ data "aws_iam_policy_document" "glue_gold_policy" {
     resources = ["arn:aws:s3:::${var.bucket_artifacts_name}"]
   }
 
-  # ---- Artifacts: leer script del job ----
+  # ---- Artifacts: escribir/borrar en TempDir ----
   statement {
-    sid     = "S3GetArtifactsScript"
-    actions = ["s3:GetObject"]
+    sid     = "S3WriteArtifactsTempDir"
+    actions = [
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:AbortMultipartUpload",
+      "s3:GetObject"
+    ]
     resources = [
-      "arn:aws:s3:::${var.bucket_artifacts_name}/jobs/*"
+      "arn:aws:s3:::${var.bucket_artifacts_name}/tmp/*"
     ]
   }
 
-  # ---- Silver: lectura de Parquet ----
+  # ---- Silver: lectura de Parquet (si algún job lo usa) ----
   statement {
     sid     = "S3ReadSilver"
     actions = ["s3:GetObject"]
     resources = [
       "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.silver_prefix}/*"
+    ]
+  }
+
+  # ---- (NEW) Gold Features Base: lectura (input del job ML) ----
+  statement {
+    sid     = "S3ReadGoldFeaturesBase"
+    actions = ["s3:GetObject"]
+    resources = [
+      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}/*"
     ]
   }
 
