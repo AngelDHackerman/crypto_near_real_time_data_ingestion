@@ -84,6 +84,43 @@ Exclude these folders explicitly in the Glue job’s read options:
 
 ---
 
+### 6. Migration to Partition Projection (Crawlerless Architecture)
+**Challenge:**  
+The Gold layer originally depended on AWS Glue Crawlers to discover new partitions daily (`dt` and `asset_id`).  
+However, this approach introduced several issues:
+- Crawlers frequently re-inferred wrong column types (`dt` and `asset_id` as `string` instead of `date`/`int`).  
+- Periodic crawls added unnecessary latency and cost.  
+- When a DDL-created table already existed, Glue created duplicate tables with random hash suffixes.  
+
+**Solution:**  
+Replaced Crawlers entirely with **Athena Partition Projection**, a feature that dynamically infers partitions based on predictable S3 paths.  
+Configured the Gold tables (`gold_features_base`, `gold_ml_training`) with `projection.*` properties and a `storage.location.template`:
+
+```sql
+ALTER TABLE crypto_gold_db.gold_features_base SET TBLPROPERTIES (
+  'projection.enabled'='true',
+  'projection.dt.type'='date',
+  'projection.dt.range'='2025-10-01,NOW',
+  'projection.dt.format'='yyyy-MM-dd',
+  'projection.asset_id.type'='integer',
+  'projection.asset_id.range'='1,9999',
+  'storage.location.template'='s3://lake-curated-data-silver-gold-crypto/top10/gold/gold_features_base/dt=${dt}/asset_id=${asset_id}/'
+);
+```
+
+**Impact:**
+
+* 🕒 Zero delay — Athena instantly recognizes new data as soon as Glue Jobs write to S3.
+* 💰 Zero cost — no recurring crawler or MSCK REPAIR operations.
+* ⚙️ Full IaC control — schema and partition logic now live entirely in Terraform/DDL, ensuring reproducibility.
+* 🧠 Type accuracy — dt is enforced as DATE and asset_id as INT, preventing schema drift.
+
+**Result:**
+
+The Gold layer is now **fully crawlerless** and self-updating — a real-time, serverless, and cost-efficient architecture aligned with modern Data Lakehouse best practices.
+
+---
+
 ### 📌 Lessons Learned
 - **Design partitions with consumers in mind**: in Raw we optimize for asset isolation, in Silver we optimize for time-based analytics.  
 - **Normalize early**: cleaning types at ingestion time prevents schema chaos later.  
