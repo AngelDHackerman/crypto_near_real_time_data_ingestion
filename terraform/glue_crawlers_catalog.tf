@@ -18,6 +18,7 @@ resource "aws_glue_crawler" "silver_crawler" {
   s3_target {
     path = "s3://${var.bucket_silver_gold_name}/${var.silver_prefix}/"
     exclusions = [
+      "${var.gold_prefix}*",         # don't touch gold
       "**/manifest/**",
       "**/status/**",
       "**/_SUCCESS",
