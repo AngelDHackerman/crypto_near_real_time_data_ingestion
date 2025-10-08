@@ -6,6 +6,7 @@ resource "aws_glue_job" "silver_job" {
   worker_type           = "G.1X"
   max_retries           = 1
   timeout               = 30
+  execution_class       = "FLEX"
 
   command {
     name            = "glueetl"
