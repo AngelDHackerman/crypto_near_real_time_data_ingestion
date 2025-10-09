@@ -54,3 +54,29 @@ df = (df
       .filter(F.col("rn_dedup") == 1)
       .drop("rn_dedup")
 )
+
+# -------- Period based on granularity (Spark: minute/hour/day/week/month) --------
+df = df.withColumn("period_start", F.date_trunc(grain, F.col("event_time_utc")))
+
+# -------- Cálculo OHLC --------
+w_asc  = Window.partitionBy("asset_id","period_start").orderBy(F.col("event_time_utc").asc())
+w_desc = Window.partitionBy("asset_id","period_start").orderBy(F.col("event_time_utc").desc())
+w_all  = Window.partitionBy("asset_id","period_start").rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing)
+
+df = (df
+      .withColumn("open_price",  F.first("price_usd", ignorenulls=True).over(w_asc))
+      .withColumn("close_price", F.first("price_usd", ignorenulls=True).over(w_desc))
+      .withColumn("high_price",  F.max("price_usd").over(w_all))
+      .withColumn("low_price",   F.min("price_usd").over(w_all))
+      .withColumn("open_mcap",   F.first("market_cap", ignorenulls=True).over(w_asc))
+      .withColumn("close_mcap",  F.first("market_cap", ignorenulls=True).over(w_desc))
+      .withColumn("high_mcap",   F.max("market_cap").over(w_all))
+      .withColumn("low_mcap",    F.min("market_cap").over(w_all))
+      .withColumn("start_ts",    F.first("event_time_utc", ignorenulls=True).over(w_asc))
+      .withColumn("end_ts",      F.first("event_time_utc", ignorenulls=True).over(w_desc))
+      .withColumn("n_ticks",     F.count(F.lit(1)).over(w_all))
+      .withColumn("valid_ticks", F.sum(F.when(F.col("price_usd").isNotNull(), 1).otherwise(0)).over(w_all))
+)
+
+# Reduce to one row by (asset_id, period_start) → we take the last one of the period
+df = df.withColumn("rn", F.row_number().over(w_desc)).filter(F.col("rn")==1).drop("rn")
