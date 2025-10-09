@@ -10,7 +10,7 @@ resource "aws_glue_job" "gold_features_base" {
   worker_type           = "G.1X"
   max_retries           = 1
   timeout               = 30
-  execution_class       = "FLEX"
+  execution_class       = "FLEX" # flex is a cheaper option
 
   command {
     name                = "glueetl"
