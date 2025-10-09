@@ -80,3 +80,31 @@ df = (df
 
 # Reduce to one row by (asset_id, period_start) → we take the last one of the period
 df = df.withColumn("rn", F.row_number().over(w_desc)).filter(F.col("rn")==1).drop("rn")
+
+# -------- Partitioned Output --------
+df_out = (df.select(
+            "asset_id","period_start","start_ts","end_ts",
+            "n_ticks","valid_ticks",
+            F.col("open_price").alias("open"),
+            F.col("high_price").alias("high"),
+            F.col("low_price").alias("low"),
+            F.col("close_price").alias("close"),
+            F.col("open_mcap").alias("open_market_cap"),
+            F.col("high_mcap").alias("high_market_cap"),
+            F.col("low_mcap").alias("low_market_cap"),
+            F.col("close_mcap").alias("close_market_cap")
+          )
+          .withColumn("g",  F.lit(grain))
+          .withColumn("dt", F.to_date(F.col("period_start")))
+)
+
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+(df_out
+ .repartition("g","dt","asset_id")
+ .write.mode("overwrite")
+ .format("parquet")
+ .option("compression","snappy")
+ .partitionBy("g","dt","asset_id")
+ .save(gold_path))
+
+job.commit()
