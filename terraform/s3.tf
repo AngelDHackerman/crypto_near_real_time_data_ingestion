@@ -157,6 +157,23 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
       days_after_initiation = 7
     }
   }
+
+  rule {
+    id = "delete-athena-query-results"
+    status = "Enabled"
+
+    filter {
+      prefix = "athena/queries/"
+    }
+
+    expiration {
+      days = 30
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
 # Upload silver glue job to S3
