@@ -5,7 +5,7 @@ resource "aws_glue_job" "silver_job" {
   number_of_workers     = 2
   worker_type           = "G.1X"
   max_retries           = 1
-  timeout               = 30
+  timeout               = 60
   execution_class       = "FLEX" # flex is a cheaper option
 
   command {

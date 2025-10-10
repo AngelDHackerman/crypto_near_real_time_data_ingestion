@@ -27,6 +27,9 @@ resource "aws_glue_job" "gold_ml_features" {
     "--enable-glue-datacatalog"              = "true"
     "--TempDir"                              = "s3://${var.bucket_artifacts_name}/tmp/"
 
+      # 🔖 Bookmarks
+    "--job-bookmark-option"                  = "job-bookmark-enable"
+
     # Business Arguments
     "--JOB_NAME"              = "gold-ml-training-cmc-${var.environment}"
     "--GOLD_BUCKET"           = var.bucket_silver_gold_name
