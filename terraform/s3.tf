@@ -186,7 +186,7 @@ resource "aws_s3_object" "gold_ml_training_glue_script" {
 }
 
 # Upload gold ohlc glue job to S3
-resource "aws_s3_object" "gold_ml_training_glue_script" {
+resource "aws_s3_object" "gold_ohlc_glue_script" {
   bucket                  = var.bucket_artifacts_name
   key                     = "jobs/gold_ohlc_h_d_w_m.py"
   source                  = "../glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py"
