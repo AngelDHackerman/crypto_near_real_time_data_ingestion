@@ -85,7 +85,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "lake_curated_data" {
     }
 
     transition {
-      days            = 90
+      days            = 360
       storage_class   = "ONEZONE_IA"
     }
 
@@ -109,6 +109,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "lake_curated_data" {
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }
+    # removed passed versioning
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+  }
   }
 }
 
