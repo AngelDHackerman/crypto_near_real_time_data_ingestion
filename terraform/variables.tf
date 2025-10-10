@@ -89,7 +89,7 @@ variable "gold_ml_prefix" {
   description = "prefix for Machine learning training data"
   type = string
 }
-variable "gold_ohlcv_prefix" {
+variable "gold_ohlc_prefix" {
   description = "prefix for OHLCV"
   type = string
 }

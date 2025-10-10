@@ -14,6 +14,8 @@ args = getResolvedOptions(sys.argv, [
     "GOLD_BUCKET",
     "GOLD_OHLC_PREFIX",
     "GRAIN"
+    # "PROCESS_FROM",    # YYYY-MM-DD (optional)
+    # "PROCESS_TO"       # YYYY-MM-DD (optional)
 ])
 
 sc = SparkContext()
@@ -26,12 +28,18 @@ silver_path = f"s3://{args['SILVER_BUCKET']}/{args['SILVER_PREFIX'].rstrip('/')}
 gold_path   = f"s3://{args['GOLD_BUCKET']}/{args['GOLD_OHLC_PREFIX'].rstrip('/')}/"
 
 grain = args["GRAIN"].lower().strip()
-valid = {"minute","hour","day","week","month"}
+valid = {"hour","day","week","month"}
 if grain not in valid:
     raise ValueError(f"GRAIN must be one of {valid}")
 
 # -------- Read Silver --------
 df = spark.read.parquet(silver_path)
+
+# ---------- Temporal Window (for controlled backfills) ----------
+# if args.get("PROCESS_FROM"):
+#     df = df.filter(F.to_date("event_time_utc") >= F.to_date(F.lit(args["PROCESS_FROM"])))
+# if args.get("PROCESS_TO"):
+#     df = df.filter(F.to_date("event_time_utc") <= F.to_date(F.lit(args["PROCESS_TO"])))
 
 # Defensive Casts
 df = (

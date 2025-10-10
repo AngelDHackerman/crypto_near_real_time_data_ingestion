@@ -1,5 +1,5 @@
 #############################
-# Glue Job: Gold Features Base
+# Glue Job: Gold Machine Learning Training
 #############################
 
 resource "aws_glue_job" "gold_ml_features" {
