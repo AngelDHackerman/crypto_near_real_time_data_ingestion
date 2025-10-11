@@ -61,7 +61,6 @@ data "aws_iam_policy_document" "sfn_policy" {
       "logs:PutResourcePolicy",
       "logs:DescribeResourcePolicies",
       "logs:DescribeLogGroups",
-      # útiles también:
       "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:PutLogEvents"

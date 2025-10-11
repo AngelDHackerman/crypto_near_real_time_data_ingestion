@@ -119,8 +119,8 @@ resource "aws_sfn_state_machine" "daily_gold_pipeline" {
 
   logging_configuration {
     include_execution_data = true
-    log_destination        = aws_cloudwatch_log_group.sfn_logs.arn
     level                  = "ALL"
+    log_destination        = "${aws_cloudwatch_log_group.sfn_logs.arn}:*"
   }
 }
 
