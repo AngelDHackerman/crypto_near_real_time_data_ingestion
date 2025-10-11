@@ -63,7 +63,7 @@ locals {
             ErrorEquals     = [
                 "ThrottlingException",
                 "Glue.CrawlerRunningException",
-                "States.TaskFailed"
+                "States.ALL"
             ]
             IntervalSeconds = 15
             BackoffRate     = 2.0
@@ -74,9 +74,46 @@ locals {
 
         WaitCrawler = {
             Type = "Wait"
-            Seconds = 30
+            Seconds = 180
             Next = "GetCrawler"
         }
+
+        GetCrawler = {
+            Type       = "Task"
+            Resource   = "arn:aws:states:::aws-sdk:glue:getCrawler"
+            Parameters = { Name = var.silver_crawler_name }
+            ResultSelector = { 
+                # State.$ creates $.State from the JSON path $.Crawler.State returned by the task
+                "State.$" = "$.Crawler.State" 
+            }
+            Next = "CrawlerDone?"
+        }
+
+        CrawlerDoneChoice = {
+        Type    = "Choice"
+        Choices = [
+          # if crawler is READY -> success
+          { Variable = "$.State", StringEquals = "READY", Next = "Success" },
+          # if crawler still RUNNING -> poll again
+          { Variable = "$.State", StringEquals = "RUNNING", Next = "WaitCrawler" }
+        ]
+        # default: if other unexpected state -> go to WaitCrawler (or consider Fail)
+        Default = "WaitCrawler"
+      }
+
+        Success = { Type = "Succeed" }
     }
   })
+}
+
+resource "aws_sfn_state_machine" "daily_gold_pipeline" {
+  name     = "near-real-time-crypto-daily-gold-pipeline"
+  role_arn = aws_iam_role.sfn_role.arn
+  definition = local.sfn_definition
+
+  logging_configuration {
+    include_execution_data = true
+    level                  = "ALL"
+    log_destination        = aws_cloudwatch_log_group.sfn_logs.arn
+  }
 }
