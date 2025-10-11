@@ -119,5 +119,13 @@ variable "gold_spark_ui_prefix" {
 variable "sfn_daily_schedule_cron" {
   description = "CRON de EventBridge en UTC (min hora dia mes diaSemana año)"
   type        = string
-  default     = "cron(0 07 * * ? *)" # 07:00 UTC diario (ajústalo si quieres)
+  default     = "cron(0 0 * * ? *)" # 00:00 UTC
+}
+variable "glue_job_silver" {
+  description = "glue job silver name"
+  type = string
+}
+variable "glue_job_gold_features" {
+  description = "glue job silver name"
+  type = string
 }
