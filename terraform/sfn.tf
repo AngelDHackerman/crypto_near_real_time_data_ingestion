@@ -117,3 +117,8 @@ resource "aws_sfn_state_machine" "daily_gold_pipeline" {
     log_destination        = aws_cloudwatch_log_group.sfn_logs.arn
   }
 }
+
+resource "aws_cloudwatch_log_group" "sfn_logs" {
+  name              = "/aws/states/near-real-time-crypto-daily-gold-pipeline"
+  retention_in_days = 14
+}
