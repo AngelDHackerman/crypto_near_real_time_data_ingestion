@@ -28,6 +28,19 @@ locals {
             }]
             Next = "GoldOHLCJob"
         }
+
+        GoldOHLCJob = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = { JobName = var.glue_job_gold_ohlc }
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 10
+          BackoffRate     = 2.0
+          MaxAttempts     = 3
+        }]
+        Next = "GoldMLTrainingJob"
+      }
     }
   })
 }
