@@ -133,3 +133,12 @@ variable "glue_job_gold_ohlc" {
   description = "glue job gold_ohlc name"
   type = string
 }
+variable "glue_job_gold_ml" {
+  description = "glue job gold_ml_training name"
+  type = string
+}
+variable "silver_crawler_name" {
+  description = "glue crawler for silver name"
+  type = string
+}
+
