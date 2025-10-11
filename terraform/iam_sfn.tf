@@ -1,9 +1,9 @@
 data "aws_iam_policy_document" "sfn_assume" {
   statement {
     effect = "Allow"
-    principals { 
-        type = "Service" 
-        identifiers = ["states.amazonaws.com"] 
+    principals {
+      type        = "Service"
+      identifiers = ["states.amazonaws.com"]
     }
     actions = ["sts:AssumeRole"]
   }
@@ -12,13 +12,13 @@ data "aws_iam_policy_document" "sfn_assume" {
 resource "aws_iam_role" "sfn_role" {
   name               = "sfn-orchestrator-${var.environment}"
   assume_role_policy = data.aws_iam_policy_document.sfn_assume.json
-  tags = var.tags
+  tags               = var.tags
 }
 
 data "aws_iam_policy_document" "sfn_policy" {
   statement {
-    sid     = "GlueJobs"
-    effect  = "Allow"
+    sid    = "GlueJobs"
+    effect = "Allow"
     actions = [
       "glue:StartJobRun",
       "glue:GetJobRun",
@@ -29,8 +29,8 @@ data "aws_iam_policy_document" "sfn_policy" {
   }
 
   statement {
-    sid     = "Crawler"
-    effect  = "Allow"
+    sid    = "Crawler"
+    effect = "Allow"
     actions = [
       "glue:StartCrawler",
       "glue:GetCrawler"
@@ -39,14 +39,34 @@ data "aws_iam_policy_document" "sfn_policy" {
   }
 
   statement {
-    sid     = "Logs"
-    effect  = "Allow"
+    sid    = "Logs"
+    effect = "Allow"
     actions = [
       "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:PutLogEvents"
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid    = "CloudWatchLogsDelivery"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogDelivery",
+      "logs:GetLogDelivery",
+      "logs:UpdateLogDelivery",
+      "logs:DeleteLogDelivery",
+      "logs:ListLogDeliveries",
+      "logs:PutResourcePolicy",
+      "logs:DescribeResourcePolicies",
+      "logs:DescribeLogGroups",
+      # útiles también:
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+    resources = ["*"] # PutResourcePolicy exige "*"
   }
 }
 
