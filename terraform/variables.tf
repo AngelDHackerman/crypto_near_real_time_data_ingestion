@@ -72,8 +72,8 @@ variable "tags" {
   description = "Common tags"
   type        = map(string)
   default     = {
-    Owner   = "angel"
-    Purpose = "crypto-near-rt"
+    Owner   = "Angel"
+    Purpose = "Near Real Time Data Ingestion Crypto Project"
   }
 }
 
@@ -115,4 +115,9 @@ variable "glue_number_of_workers" {
 variable "gold_spark_ui_prefix" {
   type        = string
   default     = "top10/_spark_ui/gold_features_base"
+}
+variable "sfn_daily_schedule_cron" {
+  description = "CRON de EventBridge en UTC (min hora dia mes diaSemana año)"
+  type        = string
+  default     = "cron(0 07 * * ? *)" # 07:00 UTC diario (ajústalo si quieres)
 }
