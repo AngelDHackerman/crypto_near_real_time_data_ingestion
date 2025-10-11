@@ -1,6 +1,6 @@
 # Create rule
 resource "aws_cloudwatch_event_rule" "extractor_schedule" {
-  name                  = "schedule-fetch-top10-${var.environment}"
+  name                  = "schedule-fetch-top10-5-min-bronze-${var.environment}"
   description           = "Triggers lambda of extractor on API CMC, in env: ${var.environment}"
   schedule_expression   = var.eventbridge_schedule_expression
   state                 = var.eventbridge_rule_enabled ? "ENABLED" : "DISABLED"
