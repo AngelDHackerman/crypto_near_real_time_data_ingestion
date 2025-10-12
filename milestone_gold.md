@@ -113,3 +113,16 @@ To **engineer predictive features and target variables** for supervised learning
 
 Provides a **machine-learning-ready dataset** for training and validation of predictive financial models.
 
+---
+
+## 🧮 4. Why Views Instead of Physical Tables
+
+Instead of materializing three separate Glue tables, **Athena logical views** were used for each Gold sublayer.
+
+### Reasons
+
+- **No data duplication:** all views share the same physical Parquet files.  
+- **Simpler catalog maintenance:** only one crawler is required for the Gold bucket.  
+- **Schema flexibility:** structural updates propagate automatically.  
+- **Cost-efficient:** less storage, shorter crawl times, and faster updates.
+
