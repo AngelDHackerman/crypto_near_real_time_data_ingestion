@@ -116,3 +116,30 @@ The normalization logic ensures consistent types and schema before persistence:
 - **Separation of Concerns:**  
   `manifest/` and `status/` prefixes are isolated to avoid interference with operational data.
 
+---
+
+## 🧮 Partitioning Rationale
+
+| Design Choice | Benefit |
+|----------------|----------|
+| `id` as top-level partition | Enables per-asset backfills |
+| Hourly granularity | Matches API cadence (every 5 min × 12 = 1 hour) |
+| JSON format | Maximizes transparency and replayability |
+| Append-only writes | No accidental overwrites; immutable logs |
+
+Bronze captures the **ingestion grain**, meaning it reflects **how and when data arrived**, not how it will be queried.  
+This is key for debugging, auditing, and full historical replay.
+
+---
+
+## 🧭 Conclusion
+
+The **Bronze Layer** is the foundation of the entire pipeline.  
+Its design prioritizes **durability, reproducibility, and transparency**:
+
+- 🧱 Immutable storage structure ensures full auditability.  
+- ⚙️ Normalization guarantees schema consistency for downstream jobs.  
+- 🚀 Partitioning by asset and time enables scalable ingestion and reprocessing.  
+- 🔒 Manifests and status files provide operational traceability.
+
+This architecture allows the system to **scale horizontally** across thousands of assets and years of historical data — while remaining cost-efficient and fully recoverable.
