@@ -23,21 +23,15 @@ This section explains why each layer of the **Near Real-Time Crypto Data Ingesti
 
 **Example Path:**
 
+```md
 s3://lake-raw-data-bronze-crypto/top10/bronze/
-
 id=<asset_id>/
-
 year=<YYYY>/
-
 month=<MM>/
-
 day=<DD>/
-
 hour=<HH>/
-
 part-*.json
-
-
+```
 
 ### 🎯 Purpose
 The **Bronze** layer captures **exactly what the source system emits**. It reflects the *ingestion grain* — data is stored at the **same granularity** it arrives (every 5 minutes).
@@ -58,13 +52,10 @@ The **Bronze** layer captures **exactly what the source system emits**. It refle
 
 **Example Path:**
 
+```md
 s3://lake-curated-data-silver-gold-crypto/top10/silver/
-
-y=<YYYY>/m=<MM>/d=<DD>/h=<HH>/
-
-part-*.snappy.parquet
-
-
+y=<YYYY>/m=<MM>/d=<DD>/h=<HH>/part-*.snappy.parquet
+```
 
 ### 🎯 Purpose
 The **Silver** layer transforms the raw JSON into typed, validated Parquet files.  
@@ -85,15 +76,12 @@ This layer is optimized for **data engineering convenience** — it still preser
 
 **Example Path:**
 
+```md
 s3://lake-curated-data-silver-gold-crypto/top10/gold/gold_features_base/
-
 dt=<YYYY-MM-DD>/
-
 asset_id=<id>/
-
 part-00001-...snappy.parquet
-
-
+```
 
 ### 🎯 Purpose
 The **Gold** layer is the **consumption-ready dataset** — clean, deduplicated, and optimized for analytical and ML workloads.
