@@ -50,3 +50,31 @@ To **normalize**, **validate**, and **enrich** the Silver dataset before any dow
 ### 🧠 Role
 
 Acts as the **core analytical dataset**, feeding both the **Gold OHLC** and **Gold ML Training** layers.
+
+
+## 📊 2. Gold OHLC (H/D/W/M)
+
+**Source:** [`gold_ohlc_h_d_w_m.py`](./glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py)
+
+---
+
+### 🎯 Purpose
+
+To generate **time-aggregated series** for financial-style analysis — specifically the **Open, High, Low, Close (OHLC)** pattern — across multiple granularities (`hour`, `day`, `week`, `month`).
+
+---
+
+### ⚙️ Key Operations
+
+- **Period definition** using `date_trunc(GRAIN)`, where `GRAIN ∈ {hour, day, week, month}`.  
+- **Window calculations:**
+  - `open`, `close` → first and last prices within the period.  
+  - `high`, `low` → max and min prices.  
+  - Also calculated for `market_cap`.  
+- **Validation metrics:** number of ticks and valid tick ratios (`n_ticks`, `valid_ticks`).
+
+---
+
+### 🧠 Role
+
+Feeds **visual dashboards** (e.g., QuickSight) and **technical market analysis**, providing a **clean and consistent time-series foundation**.
