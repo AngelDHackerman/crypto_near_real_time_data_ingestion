@@ -49,3 +49,45 @@ For every batch, two additional JSON files are written:
 - `/manifests/` → describes which assets were fetched and written.
 - `/status/` → captures the CoinMarketCap API status and metadata.
 
+---
+
+## 🧱 Partitioning Structure
+
+| Level | Key | Purpose |
+|--------|-----|----------|
+| 1 | `id` | Separates assets (BTC, ETH, etc.) |
+| 2 | `year`, `month`, `day`, `hour` | Time-based hierarchy for easy backfills |
+| 3 | `part-*` | Unique files per 5-minute batch |
+
+**Example Path:**
+
+```md
+s3://lake-raw-data-bronze-crypto/top10/bronze/id=1/year=2025/month=10/day=12/hour=08/part-1734021453-abc123.json
+```
+
+
+### ✅ Advantages
+- Enables **reprocessing of a specific hour or asset** without touching others.
+- Simplifies **parallel Lambda execution** (no S3 write conflicts).
+- Preserves **100% raw fidelity** (exact response from the API).
+
+---
+
+## 🔧 Normalization and Data Quality
+
+**Function:** `_normalize_coin_types(coin_obj)`
+
+The normalization logic ensures consistent types and schema before persistence:
+
+| Field Group | Example Fields | Action |
+|--------------|----------------|--------|
+| Root-level floats | `circulating_supply`, `max_supply`, `total_supply` | Cast to float |
+| USD quote metrics | `price`, `volume_24h`, `percent_change_*`, `market_cap`, `tvl` | Cast to float |
+| Nested fields | `quote.USD.price` | Normalized and kept as numeric |
+| Strings and tags | untouched | Preserve original structure |
+
+### Benefits
+- Prevents schema evolution conflicts in AWS Glue.  
+- Simplifies downstream parsing (Silver job can assume clean JSON).  
+- Reduces Glue DPU costs due to schema stability.
+
