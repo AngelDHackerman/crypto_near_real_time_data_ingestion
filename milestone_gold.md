@@ -126,3 +126,43 @@ Instead of materializing three separate Glue tables, **Athena logical views** we
 - **Schema flexibility:** structural updates propagate automatically.  
 - **Cost-efficient:** less storage, shorter crawl times, and faster updates.
 
+---
+
+## 🪄 5. Partition Projection (Athena Optimization)
+
+### 🧩 Challenge
+
+With multiple partition keys (`dt`, `asset_id`, `g`), continuously running Glue Crawlers would be slow and expensive.
+
+### 💡 Solution
+
+**Athena Partition Projection** was implemented to infer partitions dynamically at query time — eliminating the need for crawler updates.
+
+### 🚀 Benefits
+
+- **Zero crawler cost:** Athena automatically interprets partition keys.  
+- **Instant querying:** data available immediately after job completion.  
+- **Highly scalable:** supports thousands of assets and daily updates.  
+- **Ideal for near-real-time ingestion**, removing delay between ingestion and analysis.
+
+---
+
+### 🧱 Example Configuration
+
+```sql
+projection.enabled = true
+projection.dt.type = date
+projection.dt.range = '2024-01-01','NOW'
+projection.asset_id.type = integer
+projection.asset_id.range = 1,500
+storage.location.template = s3://lake-curated-data-silver-gold-crypto/top10/gold/features_base/dt=${dt}/asset_id=${asset_id}/
+```
+
+## 🧭 Conclusion
+
+The **Gold Layer** of the **Near Real-Time Crypto Ingestion** project embodies a **modular**, **analytics-driven**, and **ML-ready** design that:
+
+- Maintains a **single, consistent data lake** with no redundancy.  
+- Enables **deep analysis** of price, volume, and volatility across granularities.  
+- Produces **auditable and trainable datasets** for real financial modeling.  
+- Leverages **Partition Projection** and **Athena Views** for **high-performance, low-cost scalability**.
