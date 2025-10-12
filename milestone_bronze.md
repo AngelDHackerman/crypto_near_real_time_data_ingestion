@@ -91,3 +91,28 @@ The normalization logic ensures consistent types and schema before persistence:
 - Simplifies downstream parsing (Silver job can assume clean JSON).  
 - Reduces Glue DPU costs due to schema stability.
 
+---
+
+## 🪣 Example S3 Output (per execution)
+
+| Type | Prefix | Description |
+|------|---------|-------------|
+| Data | `bronze/id=1/year=2025/month=10/day=12/hour=08/part-*.json` | Raw normalized asset responses |
+| Manifest | `bronze/manifests/year=2025/.../manifest.json` | Lists written and missing assets |
+| Status | `bronze/status/year=2025/.../status.json` | API metadata and timing info |
+
+---
+
+## ⚠️ Error Handling & Idempotency
+
+- **Skip on Exists:**  
+  Before writing, each object key is checked using `s3.head_object`.  
+  If the file already exists, it is skipped to prevent duplicates.
+
+- **Retries and Logging:**  
+  Each missing asset ID is logged in the manifest.  
+  Retry logic can later re-ingest missing data using those manifests.
+
+- **Separation of Concerns:**  
+  `manifest/` and `status/` prefixes are isolated to avoid interference with operational data.
+
