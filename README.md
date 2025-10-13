@@ -1,83 +1,75 @@
-EventBridge + Lambda + S3 + Athena + IAM + CloudWatch & Terraform
+# 🚀 Near Real-Time Crypto Data Ingestion (AWS Medallion Architecture)
 
-This is a **datalake medallion architecture**
+## StepFunctions Workflow: 
+![Step Functions Workflow](./images//stepfunctions_graph_crypto.png)
 
-las particiones son por hora de ingesta, no por hora de origen
+> *Architecture diagram coming soon — will illustrate full AWS serverless components (S3, Lambda, Glue, Athena, Step Functions, EventBridge, Lake Formation).*
 
+---
 
-[crypto price endpoint](https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest)
+## 🧭 Project Overview
 
+The **Near Real-Time Crypto Data Ingestion** project is a fully serverless **data lakehouse** built on AWS following the **Medallion Architecture (Bronze → Silver → Gold)**.
 
-Name            ID
-Bitcoin         1
-Etherium        1027 
-XRP             52
-Tether          825
-BNB             1839
-Solana          5426
-USDC            3408
-Dogecoin        74
-Cardano         2010
-Tron            1958
-BAT             1697
+It ingests, processes, and prepares **top-10 cryptocurrency metrics** from the **CoinMarketCap API** every 5 minutes, producing **analytics- and ML-ready datasets**.
 
+All infrastructure is defined as **Infrastructure-as-Code (Terraform)** and integrated with **AWS Glue, Athena, and Lake Formation** for complete data governance.
 
-Usar estructura Bronze: texto crudo, Silver: texto limpio y procesado & Gold: informacion valiosa para el ML 
+---
 
-* lambda para bronze 
-* glue job para el transformer (silver)
-* glue job para feature basicos (retornos, vol, momentum) (gold)
-* glue crawler: actualizar Data Catalog 3 tablas: bronze_top10, silver_top10, gold_top10_features
-* Athena/SageMaker consumen informacion. 
+## ⚙️ Core AWS Components
 
-1. idempotencia & deduplicacion:
-    * Usa en S3 claves únicas con timestamp del proveedor: bronze/yyyymmdd/hh/mm=MM/cmc_ts=2025-09-18T02:50:00Z.json
-    * Antes de escribir a silver/gold, dedup por (asset_id, last_updated).
-2. esquema y particionado: 
-    * Particiona por fecha/hora y symbol: silver/dt=YYYY-MM-DD/hour=HH/symbol=BTC/part-*.parquet
-    * Clave primaria “lógica”: (asset_id, as_of_ts, currency='USD').
+- **Lambda (Bronze)** → API ingestion and normalization  
+- **Glue Jobs (Silver / Gold)** → Transformation, enrichment, aggregation  
+- **Glue Crawler + Athena** → Schema discovery & SQL access  
+- **Step Functions + EventBridge** → Orchestrated daily pipelines  
+- **Lake Formation** → Secure data catalog permissions  
+- **S3 Buckets** → Medallion-layer storage (raw → curated → analytics)
 
+---
 
-## Data groups for ml_training table in gold data
+## 🧱 Data Flow Summary
 
-1) Lagged returns & momentum (predictive baseline)
-    * `ret_1d`, `ret_3d`, `ret_7d`, `ret_14d`, `ret_30d` (log returns)
-    * Momentum ratios: `sma_5` / `sma_20`, `ema_12` / `ema_26`
-    * __Why?__ Crypto exhibits short-to-medium momentum and mean-reversion patches.
+1. **Bronze Layer:** Raw JSON responses are ingested from the CoinMarketCap API into S3 (partitioned by asset and time).  
+2. **Silver Layer:** Cleans & converts JSON to Parquet; schema is registered in Glue for Athena queries.  
+3. **Gold Layer:** Builds three logical datasets:  
+   - **Features Base** (validated metrics)  
+   - **OHLC** (Open-High-Low-Close series)  
+   - **ML Training** (engineered features for ML models)  
+4. **Step Functions:** Orchestrates Glue Jobs sequentially (Silver → Gold) and refreshes Athena catalogs automatically.  
+5. **Athena / QuickSight / SageMaker:** Consume curated data for analytics & machine learning.
 
-2) Volatility & dispersion
-    * Rolling stdev of returns: `vol_3d`, `vol_7d`, `vol_14d`, `vol_30d`
-    * Rolling EWMA volatility: `vol_ewma_14`
-    * __Why?__ Regime detection; higher vol often alters directional odds.
+---
 
-3) Volume, turnover & liquidity pressure
-    * `volume_24h` (level), `vol_chg_1d` (Δ vs t-1), `vol_z_14d` (z-score)
-    * `turnover_24h` (already in Gold Feature Base) & its rolling mean/stdev
-    * __Why?__ Spikes in activity frequently precede larger moves.
+## 🧩 Documentation Index
 
-4) Market-cap & dominance dynamics
-    * `mcap_chg_1d`, `mcap_dom_chg_1d` (Δ dominance vs t-1)
-    * `supply_utilization = circulating_supply / max_supply`
-    * __Why?__ Cross-asset rotation and dominance shifts carry signal.
-    
-5) Cross-sectional market factors: Compute daily factors from the cross-section (Top-10/11):
-    * __Market return__ (cap-weighted): `ret_mkt_1d`
-    * __BTC factor__: yesterday’s BTC return `ret_btc_1d`
-    * __Rolling correlation with BTC__: `corr_30d_to_btc`
-    * __Within-day rank__: `rank_mcap`, `rank_momentum_7d` (1=largest/best)
-    * __Why?__ Many alts co-move with “market” and BTC; beta & rank are useful.
+| # | Section | Description |
+|---|----------|-------------|
+| 1️⃣ | 🥉 [Bronze Layer — Raw Ingestion](./milestone_bronze.md) | Lambda-based API extraction, normalization & raw S3 storage |
+| 2️⃣ | 🥈 [Silver Layer — Transformation](./milestone_silver.md) | Cleansed Parquet data with schema tracking and traceability |
+| 3️⃣ | 🥇 [Gold Layer — Analytics & ML](./milestone_gold.md) | Feature engineering, OHLC aggregations & ML dataset generation |
+| 4️⃣ | 🧩 [Partitioning Strategy](./bronze_silver_gold_partitions.md) | Rationale for different partition grains per layer |
+| 5️⃣ | ✅ [Lake Formation Checklist](./Lake_Formation_Checklist.md) | Step-by-step setup for catalog permissions and data access |
+| 6️⃣ | 🧱 [Challenges Overcome](./challenges_overcome.md) | Technical problems solved throughout the project |
 
-6) Seasonality / calendar
-    * `dow` (day of week one-hot), `is_month_end` (0/1)
-    * __Why?__ Mild day-of-week & turn-of-month effects show up in crypto too.
+---
 
-7) Stability / quality flags
-    * Missingness counts in last 7/30 days, large gap flags
-    * __Why?__ Protect models from artifacts or thin assets.
+## 🧠 Key Outcomes
 
-All rolling features must be computed per asset_id ordered by dt, and only with past data (no leakage!).
+- Near-real-time crypto data pipeline (5 min cadence).  
+- End-to-end serverless architecture (AWS native).  
+- Full IaC deployment via Terraform.  
+- Partition-projection-based Athena queries (no crawlers).  
+- ML-ready datasets for future forecasting models.
 
+---
 
-Data provided by [CoinMarketCap.com](https://coinmarketcap.com). This data is used solely for internal research and development (model training and visualization). Raw data is not redistributed or published.
+## 🧭 Next Steps
 
+- Build QuickSight dashboards for price & volatility analysis.  
+- Develop ML prototype for price forecasting or trend classification.
 
+---
+
+📊 *Data provided by [CoinMarketCap.com](https://coinmarketcap.com).  
+Used solely for internal R&D and educational purposes.*
