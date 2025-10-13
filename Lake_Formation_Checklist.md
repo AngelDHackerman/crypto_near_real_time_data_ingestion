@@ -21,7 +21,7 @@ This checklist is reusable for both **Silver** and **Gold** layers of the crypto
 - In **Data locations**, confirm the new path is registered.  
 - Required principals:  
   - `near-real-time-crypto-glue-crawler-role` (IAM role for the crawler).  
-  - `angel-adming` (IAM user for testing).  
+  - `user-testing` (IAM user for testing).  
 - Both should have **Data location access**.  
 - The IAM user should also have *grantable* permissions if delegation is required.
 
@@ -31,7 +31,7 @@ This checklist is reusable for both **Silver** and **Gold** layers of the crypto
 - Go to **Lake Formation → Data permissions → Grant**.  
 - Principals:  
   - `near-real-time-crypto-glue-crawler-role`  
-  - `angel-adming`  
+  - `user-testing`  
 - Catalog: default (`913524903233`).  
 - Database:  
   - `crypto_silver_db` (for Silver)  
