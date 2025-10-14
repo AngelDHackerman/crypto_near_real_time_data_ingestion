@@ -166,3 +166,52 @@ The **Gold Layer** of the **Near Real-Time Crypto Ingestion** project embodies a
 - Enables **deep analysis** of price, volume, and volatility across granularities.  
 - Produces **auditable and trainable datasets** for real financial modeling.  
 - Leverages **Partition Projection** and **Athena Views** for **high-performance, low-cost scalability**.
+
+
+## 🔄 Design Update — Gold OHLC Now Reads from Gold Features Base
+
+### 🧠 Context
+
+Originally, the **Gold OHLC Glue Job** sourced its data directly from the **Silver layer**, because at that time the **Gold Features Base** was still under active development.  
+This decision helped decouple the OHLC job during early stages — allowing progress while the schema and deduplication logic of Features Base were still stabilizing.
+
+However, once **Gold Features Base** became the canonical and validated dataset, the architecture was updated to make OHLC depend on it instead of Silver.
+
+---
+
+### ⚙️ Implementation Changes
+
+| Component | Old | New |
+|------------|-----|-----|
+| **Input Path** | `s3://<silver-bucket>/<silver-prefix>/` | `s3://<gold-bucket>/<gold_features_prefix>/` |
+| **Deduplication Block** | Required | Removed (already handled in Features Base) |
+| **Schema Casting** | Defensive only | Maintained for safety |
+| **Partitioning** | `g / dt / asset_id` | Same (no change) |
+
+---
+
+### ✅ Reasons for the Change
+
+**1. Single Source of Truth:**  
+Gold Features Base already performs deduplication and type normalization, ensuring all downstream layers use consistent and validated data.
+
+**2. Data Quality:**  
+Prevents discrepancies between OHLC, ML Training, and Features datasets by basing all three on the same validated source.
+
+**3. Performance:**  
+Avoids redundant deduplication logic and reduces Glue compute time.
+
+**4. Consistency with Medallion Principles:**  
+- **Silver →** semi-clean, operational layer.  
+- **Gold →** analytical and ML-ready layer.  
+- Within Gold, **Features Base** acts as the foundation for both **OHLC** and **ML Training**.
+
+**Resulting Flow**
+```
+Silver  ──▶  Gold Features Base  ──▶  Gold OHLC
+                               └──▶  Gold ML Training
+```
+
+- OHLC and ML Training now share the same foundation (validated metrics and schema).
+- Athena Views and Partition Projection remain identical — only the upstream source changed.
+- The pipeline is now fully modular, crawlerless, and schema-consistent across all analytical layers.
