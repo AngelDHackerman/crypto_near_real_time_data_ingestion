@@ -4,6 +4,11 @@
 
 ![Near Real-Time Crypto Architecture](./images/Near_Real_Time_Data_Ingestion_Crypto.png)
 
+## S3 Bucket For Data In JSON
+How the data and partitions looks like: 
+
+![S3 Bucket For Data In JSON](./images/S3_Bronze_Bucket.png)
+
 ## StepFunctions Workflow: 
 ![Step Functions Workflow](./images//stepfunctions_graph_crypto.png)
 
