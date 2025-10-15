@@ -1,9 +1,12 @@
 # 🚀 Near Real-Time Crypto Data Ingestion (AWS Medallion Architecture)
 
+## 🧭 AWS Architecture Diagram
+
+![Near Real-Time Crypto Architecture](./images/Near_Real_Time_Data_Ingestion_Crypto.png)
+
 ## StepFunctions Workflow: 
 ![Step Functions Workflow](./images//stepfunctions_graph_crypto.png)
 
-> *Architecture diagram coming soon — will illustrate full AWS serverless components (S3, Lambda, Glue, Athena, Step Functions, EventBridge, Lake Formation).*
 
 ---
 
