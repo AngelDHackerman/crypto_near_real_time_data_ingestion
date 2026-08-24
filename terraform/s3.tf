@@ -8,6 +8,14 @@ resource "aws_s3_bucket" "lake_raw_data" {
     Owner       = "Angel Hackerman"
     Project     = "Crypto Near Real Time Data Ingestion"
   }
+
+  # Guard rail for the state re-import: bucket names are immutable, so any
+  # mismatch between terraform.tfvars and reality would otherwise be planned
+  # as destroy+recreate, wiping the data lake.
+  lifecycle {
+    prevent_destroy = true
+  }
+
 }
 
 resource "aws_s3_bucket_versioning" "lake_raw_data" {
@@ -58,6 +66,14 @@ resource "aws_s3_bucket" "lake_curated_data" {
     Owner       = "Angel Hackerman"
     Project     = "Crypto Near Real Time Data Ingestion"
   }
+
+  # Guard rail for the state re-import: bucket names are immutable, so any
+  # mismatch between terraform.tfvars and reality would otherwise be planned
+  # as destroy+recreate, wiping the data lake.
+  lifecycle {
+    prevent_destroy = true
+  }
+
 }
 
 resource "aws_s3_bucket_versioning" "lake_curated_data" {
@@ -126,6 +142,14 @@ resource "aws_s3_bucket" "artifacts-crypto" {
     Owner       = "Angel Hackerman"
     Project     = "Crypto Near Real Time Data Ingestion"
   }
+
+  # Guard rail for the state re-import: bucket names are immutable, so any
+  # mismatch between terraform.tfvars and reality would otherwise be planned
+  # as destroy+recreate, wiping the data lake.
+  lifecycle {
+    prevent_destroy = true
+  }
+
 }
 
 resource "aws_s3_bucket_versioning" "artifacts-crypto" {

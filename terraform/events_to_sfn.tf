@@ -43,4 +43,7 @@ resource "aws_cloudwatch_event_target" "daily_gold_target" {
   rule     = aws_cloudwatch_event_rule.daily_gold_silver.name
   arn      = aws_sfn_state_machine.daily_gold_pipeline.arn
   role_arn = aws_iam_role.events_to_sfn_role.arn
+
+  # See note in eventBridge.tf: pinned to the AWS-generated ID for the import.
+  target_id = "terraform-20251011222021689700000001"
 }

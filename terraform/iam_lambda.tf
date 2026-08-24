@@ -52,10 +52,12 @@ resource "aws_iam_role_policy_attachment" "lambda_s3_rw_attach" {
   policy_arn  = aws_iam_policy.lambda_s3_rw_bronze.arn
 }
 
-# Access to Secrets Manager from Lambda
-data "aws_secretsmanager_secret" "crypto" {
-  name = "near_real_time_crypto_ingestion_secrets"
-}
+# Access to Secrets Manager from Lambda.
+# NOTE: this used to be a `data "aws_secretsmanager_secret"` lookup by hardcoded
+# name, pointing at the very same secret that secrets_manager.tf creates as a
+# resource. That is an implicit dependency Terraform cannot see: it breaks on a
+# clean destroy/apply, and it duplicates the name in two places. Referencing the
+# resource directly makes the dependency explicit.
 
 resource "aws_iam_policy" "lambda_read_secret" {
   name        = "lambda-read-crypto-secret"
@@ -71,7 +73,7 @@ resource "aws_iam_policy" "lambda_read_secret" {
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret"
         ],
-        Resource = data.aws_secretsmanager_secret.crypto.arn
+        Resource = aws_secretsmanager_secret.near_real_time_crypto.arn
       }
     ]
   })

@@ -1,3 +1,7 @@
+variable "aws_account_id" {
+  description = "AWS account ID that owns every resource in this project. Used to pin the provider (allowed_account_ids) and to build Glue catalog import IDs."
+  type        = string
+}
 variable "aws_region" {
   description = "AWS Region"
   type        = string
