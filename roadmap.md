@@ -49,7 +49,7 @@ Until that moment the correct state of this project is **asleep**.
 | # | Phase | Status | Branch / PR | Notes |
 |---|-------|--------|-------------|-------|
 | 0 | Unblock HTTPS egress from WSL | ✅ Done | — | `aws sts get-caller-identity` works |
-| 1 | Recover `terraform.tfstate` by import | ✅ Done | `master` (uncommitted) | 55 imported, 6 added, 3 changed, **0 destroyed**; plan clean |
+| 1 | Recover `terraform.tfstate` by import | ✅ Done | `phase-1/state-recovery-and-roadmap` → `master` | 55 imported, 6 added, 3 changed, **0 destroyed**; plan clean |
 | 2 | Remote backend on S3 | ⬜ Not started | | Kills the local-state risk for good |
 | 3 | Terraform refactor into modules | ⬜ Not started | | Uses `moved {}` blocks, zero-diff plan |
 | 4 | Data source strategy (Binance WS + CMC) | ⬜ Not started | | Decision phase, no infra. Fixed 50-asset list |
