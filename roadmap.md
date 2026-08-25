@@ -60,7 +60,7 @@ Until that moment the correct state of this project is **asleep**.
 |---|-------|--------|-------------|-------|
 | 0 | Unblock HTTPS egress from WSL | ✅ Done | — | `aws sts get-caller-identity` works |
 | 1 | Recover `terraform.tfstate` by import | ✅ Done | `phase-1/state-recovery-and-roadmap` → `master` | 55 imported, 6 added, 3 changed, **0 destroyed**; plan clean |
-| 2 | Remote backend on S3 | ⬜ Not started | | Kills the local-state risk for good. Dedicated bucket, **not** `artifacts` |
+| 2 | Remote backend on S3 | ✅ Done | `phase-2/remote-backend` | State on `crypto-tf-state-913524903233`, native S3 locking. Plan clean, local state deleted |
 | 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
 | 3 | Terraform refactor into modules | ⬜ Not started | | Uses `moved {}` blocks, zero-diff plan |
 | 4 | Data source strategy (Binance WS + CMC) | ⬜ Not started | | Decision phase, no infra. Fixed 50-asset list |
@@ -152,7 +152,7 @@ pipeline is not currently running. `terraform.tfvars` sets
 
 ---
 
-## Phase 2 — Remote backend on S3
+## Phase 2 — Remote backend on S3 ✅
 
 **Goal:** eliminate the root cause of this whole mess. The state is still a local
 file; one more machine migration and it is lost again.
@@ -191,12 +191,37 @@ to it**.
   state is readable and the plan is still clean.
 
 **DoD**
-- [ ] State bucket exists, versioned, encrypted, public access blocked
-- [ ] `backend "s3"` configured with `use_lockfile = true`
-- [ ] `terraform init -migrate-state` completed successfully
-- [ ] `terraform plan` still reports `No changes` reading from the remote state
-- [ ] Local `terraform.tfstate` deleted; state bucket managed by Terraform itself
-- [ ] Concurrent-run lock verified (a second plan blocks while one is running)
+- [x] State bucket `crypto-tf-state-913524903233` exists, versioned, SSE (AES256), public access blocked
+- [x] `backend "s3"` configured with `use_lockfile = true` (`terraform/backend.tf`)
+- [x] `terraform init -migrate-state` completed successfully — 87 resources now read from S3
+- [x] `terraform plan` still reports `No changes` reading from the remote state
+- [x] Local `terraform.tfstate` / `.tfstate.backup` deleted; the bucket is managed by this same config (`terraform/tfstate.tf`)
+- [x] Concurrent-run lock verified: a second `plan` was rejected with `412 PreconditionFailed` while the first held the lock, and named the holder (`OperationTypePlan`, `hp@Angel-Hackerman-Lab`)
+- [x] No lifecycle rule on the state bucket — old versions are the undo history and must never expire
+- [x] No runtime role (Lambda, Glue, Step Functions, Athena, crawler) has any statement naming the state bucket; checked that none of them carries a wildcard S3 resource either
+
+**What actually happened**
+
+The bootstrap ran as planned: `terraform/bootstrap-tfstate/` created the four
+resources with local state, they were imported one by one into the main config,
+and the plan came back at **zero diffs** before the backend block was touched —
+so the import was proven clean while the state was still local and recoverable.
+That directory was **deleted** after the import: two configs declaring the same
+bucket is a footgun, and the procedure is recorded here to rebuild it if ever
+needed.
+
+`init -migrate-state` truncated the local `terraform.tfstate` to 0 bytes and left
+the pre-migration copy in `terraform.tfstate.backup`; both were deleted after the
+remote read was verified. A full copy is at
+`~/crypto-tfstate-backup-before-phase2-migrate-20260825-1200.json`.
+
+The state key is `crypto/terraform.tfstate` — the `crypto/` prefix leaves room for
+the `envs/<env>/` layout Phase 3 introduces without another state migration.
+
+**One consequence to remember:** this config now manages the bucket its own state
+lives in. A real `terraform destroy` needs `terraform state rm` on the four
+`tf_state` resources first, then a manual empty-and-delete. `prevent_destroy` is
+set, so an accidental one fails loudly rather than deleting the state mid-apply.
 
 **Prompt to run**
 
@@ -245,7 +270,7 @@ name is ours by construction.
 | `crypto-silver-layer-913524903233` | Cleaned and typed Silver tables, nothing else |
 | `crypto-gold-layer-913524903233` | Gold datasets: features base, OHLC, ML training |
 | `crypto-artifacts-913524903233` | **Everything that is not lake data** — Glue job scripts, Lambda and producer packages, Spark `tmp/`, Spark UI logs, Athena query results, and any future one-off |
-| `crypto-tf-state-913524903233` | Terraform state only (created in Phase 2) |
+| `crypto-tf-state-913524903233` | Terraform state only. No runtime role gets access |
 
 That fourth row is the standing rule for the whole project: when something new
 needs somewhere to live and it is not lake data, it goes in **artifacts**. No new
