@@ -12,6 +12,13 @@
 # forces into the state machine.
 # =============================================================================
 
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+locals {
+  glue_arn_prefix = "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}"
+}
+
 # -----------------------------------------------------------------------------
 # Glue databases and the Silver crawler
 # -----------------------------------------------------------------------------
@@ -207,7 +214,19 @@ data "aws_iam_policy_document" "glue_crawler_policy" {
     resources = ["${var.silver_bucket_arn}/*"]
   }
 
-  # Glue Catalog actions - restrict
+  # Glue Catalog actions, scoped to the Silver database and its tables.
+  #
+  # These were Resource = ["*"], which in an account shared with other projects
+  # meant this crawler could DeleteTable anywhere -- the Gold database included,
+  # where the four gold_ohlc_* views live and where nothing should ever be
+  # written by a crawler.
+  #
+  # HONEST CAVEAT: AWSGlueServiceRole is still attached below, and that AWS
+  # managed policy grants glue:* on "*". So this scoping does not lower the
+  # role's effective ceiling today -- it removes the *inline* grant, so that
+  # detaching the managed policy is a one-line change rather than a rewrite.
+  # Moot in Phase 6, which deletes this crawler once Silver moves to partition
+  # projection.
   statement {
     sid = "GlueCatalogAccess"
     actions = [
@@ -215,7 +234,10 @@ data "aws_iam_policy_document" "glue_crawler_policy" {
       "glue:GetDatabases",
       "glue:CreateDatabase"
     ]
-    resources = ["*"]
+    resources = [
+      "${local.glue_arn_prefix}:catalog",
+      "${local.glue_arn_prefix}:database/${aws_glue_catalog_database.silver_db.name}",
+    ]
   }
 
   statement {
@@ -227,10 +249,15 @@ data "aws_iam_policy_document" "glue_crawler_policy" {
       "glue:UpdateTable",
       "glue:DeleteTable"
     ]
-    resources = ["*"]
+    resources = [
+      "${local.glue_arn_prefix}:catalog",
+      "${local.glue_arn_prefix}:database/${aws_glue_catalog_database.silver_db.name}",
+      "${local.glue_arn_prefix}:table/${aws_glue_catalog_database.silver_db.name}/*",
+    ]
   }
 
-  # CloudWatch logs
+  # Resource = "*" justified: Glue names the crawler's log group and streams at
+  # runtime under /aws-glue/crawlers*, and those names are not known at plan time.
   statement {
     sid       = "CWLogs"
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]

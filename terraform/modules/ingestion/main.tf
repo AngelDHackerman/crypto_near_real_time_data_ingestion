@@ -162,11 +162,13 @@ resource "aws_cloudwatch_event_target" "extractor_target" {
   rule = aws_cloudwatch_event_rule.extractor_schedule.name
   arn  = aws_lambda_function.fetch_top10_crypto.arn
 
-  # Pinned to the ID AWS auto-generated on the original apply. Without it the
-  # import cannot be addressed (import ID is "<rule-name>/<target-id>") and any
-  # plan would propose replacing the target. Renamed to something readable in
-  # Phase 3, as a deliberate change.
-  target_id = "terraform-20251011221948456600000001"
+  # Was "terraform-20251011221948456600000001" -- the ID AWS auto-generated on
+  # the original apply, pinned in Phase 1 because the import ID is
+  # "<rule-name>/<target-id>" and an unnamed target is not addressable. Renamed
+  # here now that the import is long behind us. target_id is ForceNew, so this
+  # replaces the target: a delete plus a create of one pointer, not of the
+  # Lambda it points at, and the rule is DISABLED anyway.
+  target_id = "cmc-extractor-lambda"
 }
 
 resource "aws_lambda_permission" "allow_eventbridge_invoke" {

@@ -170,6 +170,18 @@ resource "aws_iam_role" "sfn_role" {
   tags               = var.tags
 }
 
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+locals {
+  glue_arn_prefix = "arn:aws:glue:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}"
+}
+
+# This role used to grant every Glue action on Resource = ["*"], which
+# contradicted the project's own least-privilege ground rule: it could start,
+# inspect and stop ANY Glue job or crawler in an account that is shared with
+# other projects. Scoped to the four jobs and the one crawler this machine
+# actually orchestrates.
 data "aws_iam_policy_document" "sfn_policy" {
   statement {
     sid    = "GlueJobs"
@@ -180,7 +192,12 @@ data "aws_iam_policy_document" "sfn_policy" {
       "glue:GetJobRuns",
       "glue:BatchStopJobRun"
     ]
-    resources = ["*"]
+    resources = [
+      "${local.glue_arn_prefix}:job/${var.silver_job_name}",
+      "${local.glue_arn_prefix}:job/${var.gold_features_job_name}",
+      "${local.glue_arn_prefix}:job/${var.gold_ohlc_job_name}",
+      "${local.glue_arn_prefix}:job/${var.gold_ml_job_name}",
+    ]
   }
 
   statement {
@@ -190,20 +207,21 @@ data "aws_iam_policy_document" "sfn_policy" {
       "glue:StartCrawler",
       "glue:GetCrawler"
     ]
-    resources = ["*"]
+    resources = ["${local.glue_arn_prefix}:crawler/${var.silver_crawler_name}"]
   }
 
-  statement {
-    sid    = "Logs"
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:PutLogEvents"
-    ]
-    resources = ["*"]
-  }
-
+  # Resource = "*" justified, and it is the only one left in this role.
+  #
+  # Step Functions writes through the CloudWatch Logs *vended logs* delivery
+  # API, and AWS's own documented policy for it requires "*": logs:PutResourcePolicy
+  # and the CreateLogDelivery/UpdateLogDelivery family do not accept a resource
+  # ARN at all, because the delivery object does not exist yet when permission
+  # is evaluated. Narrowing this to the sfn_logs log group makes the state
+  # machine fail to start with an opaque logging error.
+  #
+  # This statement absorbed a separate "Logs" statement that granted
+  # CreateLogGroup / CreateLogStream / PutLogEvents on "*" -- a strict subset of
+  # what is already below, so it was pure duplication.
   statement {
     sid    = "CloudWatchLogsDelivery"
     effect = "Allow"
@@ -220,7 +238,7 @@ data "aws_iam_policy_document" "sfn_policy" {
       "logs:CreateLogStream",
       "logs:PutLogEvents"
     ]
-    resources = ["*"] # PutResourcePolicy exige "*"
+    resources = ["*"]
   }
 }
 
@@ -283,7 +301,8 @@ resource "aws_cloudwatch_event_target" "daily_gold_target" {
   arn      = aws_sfn_state_machine.daily_gold_pipeline.arn
   role_arn = aws_iam_role.events_to_sfn_role.arn
 
-  # See note in eventBridge.tf: pinned to the AWS-generated ID for the import.
-  target_id = "terraform-20251011222021689700000001"
+  # Was "terraform-20251011222021689700000001". See the note in
+  # modules/ingestion/main.tf -- pinned for the Phase 1 import, readable now.
+  target_id = "daily-gold-pipeline"
 }
 

@@ -90,10 +90,10 @@ data "aws_iam_policy_document" "glue_s3" {
 }
 
 resource "aws_iam_role_policy" "glue_s3_inline" {
-  # Pinned to the AWS-generated name from the original apply: the import ID is
-  # "<role-name>:<policy-name>", and leaving it unnamed would make every plan
-  # propose a replacement. Renamed in Phase 3, as a deliberate change.
-  name   = "terraform-20250926203013591400000001"
+  # Was "terraform-20250926203013591400000001", pinned in Phase 1 for the same
+  # reason as the event targets: the import ID is "<role-name>:<policy-name>",
+  # so an unnamed inline policy is not addressable.
+  name   = "silver-job-s3-access"
   role   = aws_iam_role.glue_role.id
   policy = data.aws_iam_policy_document.glue_s3.json
 }

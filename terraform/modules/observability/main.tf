@@ -68,6 +68,7 @@ resource "aws_cloudwatch_event_target" "sfn_failed_to_sns" {
   rule = aws_cloudwatch_event_rule.sfn_failed.name
   arn  = aws_sns_topic.sfn_alerts.arn
 
-  # See note in eventBridge.tf: pinned to the AWS-generated ID for the import.
-  target_id = "terraform-20251012021255924500000001"
+  # Was "terraform-20251012021255924500000001". See the note in
+  # modules/ingestion/main.tf -- pinned for the Phase 1 import, readable now.
+  target_id = "sfn-failure-to-sns"
 }
