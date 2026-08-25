@@ -50,8 +50,13 @@ now literally nothing to lose by staying asleep.
 
 **Wake-up conditions — both must be met:**
 
-1. The Terraform refactor is complete (Phase 3 done, modules in place, plan clean).
+1. ~~The Terraform refactor is complete (Phase 3 done, modules in place, plan clean).~~
+   **Met.** Six modules, an `envs/crypto/` composition layer, plan clean.
 2. Kinesis ingestion is deployed (Phase 5 done, streaming path verified end to end).
+   **Still open — the only remaining precondition.**
+
+Phase 3 deliberately did not wake anything: all three rules were re-checked in
+AWS after the apply and are still `DISABLED`.
 
 Only then are the EventBridge rules re-enabled, deliberately and as code — by
 flipping `eventbridge_rule_enabled` to `true`, never by clicking in the console.
@@ -67,7 +72,7 @@ Until that moment the correct state of this project is **asleep**.
 | 1 | Recover `terraform.tfstate` by import | ✅ Done | `phase-1/state-recovery-and-roadmap` → `master` | 55 imported, 6 added, 3 changed, **0 destroyed**; plan clean |
 | 2 | Remote backend on S3 | ✅ Done | `phase-2/remote-backend` → `master` [#2] | State on `crypto-tf-state-913524903233`, native S3 locking. Plan clean, local state deleted |
 | 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
-| 3 | Terraform refactor into modules | 🟡 In progress | `phase-3/terraform-modules` | 69 `moved {}` blocks applied, all resources in modules, plan clean. Cleanup + `default_tags` commits await one apply |
+| 3 | Terraform refactor into modules | ✅ Done | `phase-3/terraform-modules` | 69 `moved {}` blocks, **0 destroyed** on the structural apply. 6 modules + `envs/crypto/`. Plan clean |
 | 4 | Data source strategy (Binance WS + CMC) | ⬜ Not started | | Decision phase, no infra. Fixed 50-asset list |
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ⬜ Not started | | Depends on 4. **Project wakes up here.** Producer hosting undecided |
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler. Buckets/prefixes already settled in 2.1 |
@@ -433,7 +438,7 @@ next time the temptation appears the reasoning should be visible.
 
 ---
 
-## Phase 3 — Terraform refactor into modules
+## Phase 3 — Terraform refactor into modules ✅
 
 **Goal:** turn 20 flat `.tf` files into a readable module structure.
 
@@ -511,7 +516,8 @@ they grant access to, which is exactly what makes the codebase hard to read.
 - [x] `terraform fmt -check -recursive` passes
 - [x] IAM `Resource = "*"` either scoped to ARNs or justified in a comment
 - [x] `moved {}` blocks removed in a follow-up commit once applied
-- [ ] **Remaining: one apply.** The cleanup and `default_tags` commits are written, planned and verified but not applied — `4 to add, 39 to change, 4 to destroy`. See *What actually happened* below
+- [x] Cleanup + `default_tags` applied: `4 added, 38 changed, 4 destroyed`. Final plan reports `No changes`
+- [x] Verified in AWS, not just in the plan: no `terraform-2025…` identifier survives, and all three EventBridge rules are still `DISABLED` — the phase did **not** wake the project up
 
 **What actually happened**
 
