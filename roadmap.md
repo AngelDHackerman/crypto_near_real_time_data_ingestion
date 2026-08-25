@@ -67,7 +67,7 @@ Until that moment the correct state of this project is **asleep**.
 | 1 | Recover `terraform.tfstate` by import | ✅ Done | `phase-1/state-recovery-and-roadmap` → `master` | 55 imported, 6 added, 3 changed, **0 destroyed**; plan clean |
 | 2 | Remote backend on S3 | ✅ Done | `phase-2/remote-backend` → `master` [#2] | State on `crypto-tf-state-913524903233`, native S3 locking. Plan clean, local state deleted |
 | 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
-| 3 | Terraform refactor into modules | ⬜ Not started | | **Next up.** Uses `moved {}` blocks, zero-diff plan |
+| 3 | Terraform refactor into modules | 🟡 In progress | `phase-3/terraform-modules` | 69 `moved {}` blocks applied, all resources in modules, plan clean. Cleanup + `default_tags` commits await one apply |
 | 4 | Data source strategy (Binance WS + CMC) | ⬜ Not started | | Decision phase, no infra. Fixed 50-asset list |
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ⬜ Not started | | Depends on 4. **Project wakes up here.** Producer hosting undecided |
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler. Buckets/prefixes already settled in 2.1 |
@@ -458,6 +458,14 @@ terraform/
     └── crypto/         # main.tf, backend.tf, tfstate.tf, versions.tf, terraform.tfvars
 ```
 
+**As built**, every module carries `main.tf` + `variables.tf` + `outputs.tf` +
+`versions.tf`, and `envs/crypto/` also holds `providers.tf`, `variables.tf` and
+`outputs.tf`. Two placement calls worth naming: the `aws_s3_object` Glue script
+uploads went to `processing/`, not `storage/` — a job script is a deployment
+artifact of the job that runs it, and storage owns buckets rather than what goes
+in them — and the Athena workgroup went to `catalog/`, since it is the query
+surface over the Glue databases rather than a thing of its own.
+
 **Decided: the state bucket does NOT go into `modules/storage/`.** `tfstate.tf`
 stays at the env level, next to `backend.tf`. `modules/storage/` is the lake —
 bronze, silver, gold, artifacts — and the state bucket is infrastructure *of* the
@@ -494,16 +502,58 @@ they grant access to, which is exactly what makes the codebase hard to read.
 - Add `outputs.tf` — there is none today.
 
 **DoD**
-- [ ] All resources live inside modules; `envs/crypto/` holds only composition
-- [ ] Every module has its own `versions.tf` with pinned providers
-- [ ] `moved {}` blocks for every relocated address
-- [ ] `terraform plan` reports `No changes` after the refactor
-- [ ] `backend.tf` and `tfstate.tf` live in `envs/crypto/`; `terraform init` there
-      reuses the same bucket and key and does **not** offer to migrate state
-- [ ] The state bucket stayed out of `modules/storage/`
-- [ ] `terraform fmt -check -recursive` passes
-- [ ] IAM `Resource = "*"` either scoped to ARNs or justified in a comment
-- [ ] `moved {}` blocks removed in a follow-up commit once applied
+- [x] All resources live inside modules; `envs/crypto/` holds only composition — 69 of 73 addresses are under `module.*`; the only 4 left at env level are the `tf_state` resources, which is the point
+- [x] Every module has its own `versions.tf` with pinned providers — Terraform does **not** inherit `required_providers` into child modules, so without this a module may resolve a different provider version than the env that calls it
+- [x] `moved {}` blocks for every relocated address — 69
+- [x] `terraform plan` reports `No changes` after the refactor
+- [x] `backend.tf` and `tfstate.tf` live in `envs/crypto/`; `terraform init` there reused the same bucket and key and did **not** offer to migrate state
+- [x] The state bucket stayed out of `modules/storage/`
+- [x] `terraform fmt -check -recursive` passes
+- [x] IAM `Resource = "*"` either scoped to ARNs or justified in a comment
+- [x] `moved {}` blocks removed in a follow-up commit once applied
+- [ ] **Remaining: one apply.** The cleanup and `default_tags` commits are written, planned and verified but not applied — `4 to add, 39 to change, 4 to destroy`. See *What actually happened* below
+
+**What actually happened**
+
+The refactor itself came out exactly as designed: **69 resources moved with zero
+diff**. Two things are worth recording because they will recur.
+
+**1. Relative paths are resolved from the ROOT MODULE directory — and Phase 3
+moves that directory.** This is the one place a "zero-diff" module refactor
+cannot be zero-diff, and it is structural rather than a mistake:
+
+| Resource | Attribute | Was | Now |
+|---|---|---|---|
+| `aws_lambda_function.fetch_top10_crypto` | `filename` | `../extractor_bronze_lambda/build/…` | `./../../../extractor_bronze_lambda/build/…` |
+| 4 × `aws_s3_object` Glue scripts | `source` | `../glue_jobs_silver_gold/…` | `./../../../glue_jobs_silver_gold/…` |
+
+`source` and `filename` are stored in state, so changing the string is a diff —
+even though `etag` and `source_code_hash` stayed identical in the plan, which is
+the proof the bytes never changed. The structural apply was therefore
+`0 added, 5 changed, 0 destroyed`, and the follow-up plan reports *"No changes."*
+
+There was an alternative — patch those five strings directly in the state file,
+since AWS has no notion of either attribute — and it was **rejected on purpose**.
+Re-uploading identical bytes is cheap and honest; hand-editing state to
+manufacture a prettier plan summary is not.
+
+**2. Names are now owned by the resources that create them.** The Glue job and
+crawler names reached the state machine through five tfvars variables — a second
+copy of a name the resource already defines, and exactly the duplication that
+made the Phase 1 recovery dangerous. They are now module outputs, so a job
+rename can no longer silently desynchronise the orchestration that calls it. The
+plan confirmed all five values were identical, so this cost zero diffs.
+
+Also deleted, all declared and referenced by nothing: `top10_list_symbol`,
+`gold_job_name`, `glue_version`, `glue_worker_type`, `glue_number_of_workers`,
+`secrets_manager_name`. `top10_list_id` became `tracked_asset_ids`.
+
+**One caveat recorded rather than fixed.** Scoping the crawler's inline policy to
+the Silver database does **not** lower its effective ceiling today, because
+`AWSGlueServiceRole` is still attached and that AWS managed policy grants
+`glue:*` on `*`. What the scoping buys is that detaching the managed policy
+becomes a one-line change instead of a rewrite. Moot in Phase 6, which deletes
+the crawler.
 
 **Prompt to run**
 
@@ -981,22 +1031,22 @@ phase. Each is tagged with where it gets resolved.
 
 | Item | Resolve in | Notes |
 |---|---|---|
-| Rename the 3 auto-generated event `target_id`s | Phase 3 | Pinned to AWS-generated values for the import |
-| Rename the Glue inline policy `terraform-2025...` | Phase 3 | Same reason |
-| `iam_sfn.tf` grants Glue on `Resource = ["*"]` | Phase 3 | Contradicts the project's least-privilege rule |
-| Unused `top10_list_symbol` variable | Phase 3 | Declared in `variables.tf`, set in `terraform.tfvars`, referenced by nothing |
-| `backend.tf` / `tfstate.tf` must move to `envs/crypto/` | Phase 3 | Same bucket and key — a re-init, not a state migration. Keep the state bucket OUT of `modules/storage/` |
-| `terraform.tfvars` exists only on one machine | Phase 3 | Phase 2 made the *state* durable, not this file. Gitignored by design; decide on a durable home (SSM Parameter Store, or accept a documented manual backup) |
-| `terraform fmt` across the whole codebase | Phase 3 | Kept out of Phase 1 to keep that diff readable |
-| `default_tags` on the provider | Phase 3 | Kept out of Phase 1 — would have retagged everything |
-| No `outputs.tf` anywhere | Phase 3 | |
+| Rename the 3 auto-generated event `target_id`s | Phase 3 ✅ | Now `cmc-extractor-lambda`, `daily-gold-pipeline`, `sfn-failure-to-sns`. `target_id` is ForceNew, so each was a delete+create of one pointer |
+| Rename the Glue inline policy `terraform-2025...` | Phase 3 ✅ | Now `silver-job-s3-access` |
+| `iam_sfn.tf` grants Glue on `Resource = ["*"]` | Phase 3 ✅ | Scoped to the 4 job ARNs + the 1 crawler ARN. A redundant `Logs` statement (a strict subset of the delivery statement) was deleted with it |
+| Unused `top10_list_symbol` variable | Phase 3 ✅ | Deleted, along with 5 more dead declarations found the same way: `gold_job_name`, `glue_version`, `glue_worker_type`, `glue_number_of_workers`, `secrets_manager_name` |
+| `backend.tf` / `tfstate.tf` must move to `envs/crypto/` | Phase 3 ✅ | Moved. `init` reused the same bucket and key and offered no migration, exactly as the Phase 2 `crypto/` key prefix was chosen to allow |
+| `terraform.tfvars` exists only on one machine | Phase 3 → **still open** | Moved to `envs/crypto/` with the rest of the root module, but that changes where it lives, not how durable it is. Still gitignored, still one copy. Decide: SSM Parameter Store, or accept a documented manual backup |
+| `terraform fmt` across the whole codebase | Phase 3 ✅ | `fmt -check -recursive` passes |
+| `default_tags` on the provider | Phase 3 ✅ | `Project` / `Environment` / `ManagedBy` / `Repository`. 39 tags-only in-place updates, nothing replaced |
+| No `outputs.tf` anywhere | Phase 3 ✅ | Added at env level, plus one per module |
 | **Drop the `top10/` prefix** | Phase 2.1 ✅ | The name already lies (11 assets today, 50 later). Free there: the data is deleted, so there is nothing to migrate — only DDL, Glue arguments and IAM ARNs to rewrite. The `top10_list_id` / `top10_list_symbol` variable names follow in Phase 3 |
 | **Silver and Gold share one bucket** | Phase 2.1 ✅ | Forces lifecycle rules and IAM to be built on prefix filters instead of bucket ARNs |
 | **Artifacts bucket is named `artifacts-crypto-data-crypto`** | Phase 2.1 ✅ | Names are immutable, so the fix is a new bucket under the `<env>-<purpose>-<account>` convention |
 | Prefix-filtered lifecycle rules break silently on a rename | Phase 2.1 ✅ | `top10/silver/` and `top10/gold/` filters would stop matching with no error |
 | Glue crawler S3 target is immutable under `CRAWL_NEW_FOLDERS_ONLY` | Phase 2.1 ✅ | Any future target change needs `-replace`, not an update. Moot once Phase 6 deletes the crawler |
 | **Delete the current lake data — deliberate clean slate** | Phase 2.1 ✅ | Incomplete series, provisional 11-asset list, polling-era design. Angel's call: start from zero rather than migrate |
-| Unused `gold_spark_ui_prefix` variable | Phase 2.1 ✅ | Already deleted. What survives is an orphan comment in `variables.tf` describing it, now stranded above an unrelated variable — sweep it in Phase 3 |
+| Unused `gold_spark_ui_prefix` variable | Phase 2.1 ✅ | Deleted there; its orphaned comment was swept in Phase 3 ✅ |
 | Curate the final 50-asset list | Phase 4 | Static and hand-picked, never a live ranking. The current 11 ids are provisional |
 | **Producer hosting: Fargate 24/7 vs time-boxed vs Lambda polling** | Phase 5 | ⚠️ Open decision, Angel's call. First recurring cost in the project — not to be defaulted into |
 | Firehose partitioning: dynamic vs native prefix | Phase 6 | Deep analysis required; affects Silver and cost |
@@ -1006,7 +1056,7 @@ phase. Each is tagged with where it gets resolved.
 | Step Functions has no `Catch` anywhere | Phase 6 | Alerts cannot say which step failed |
 | Remove the crawler polling states | Phase 6 | Depends on Silver projection migration |
 | Split into two state machines | Phase 13 | Before the feedback loop makes it unreadable |
-| All 3 EventBridge rules are DISABLED in AWS | Phase 5 | Intentional — project is dormant. Re-enable only once Phase 3 and Phase 5 are both done |
+| All 3 EventBridge rules are DISABLED in AWS | Phase 5 | Intentional — project is dormant. Re-enable only once Phase 3 and Phase 5 are both done. **Phase 3 is now done**, so Phase 5 is the only remaining precondition |
 | The neighbour `loteria-pipeline` project | after Phase 12 | Apply the container pattern there once internalised |
 
 ---
