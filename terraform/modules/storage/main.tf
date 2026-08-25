@@ -1,5 +1,12 @@
 # =============================================================================
-# Storage -- one bucket per layer  (roadmap.md, Phase 2.1)
+# Storage module -- the lake, one bucket per layer  (roadmap.md, Phase 2.1 / 3)
+#
+# WHAT IS DELIBERATELY NOT HERE: the Terraform state bucket. It lives at the env
+# level in envs/crypto/tfstate.tf, next to backend.tf. This module is the LAKE --
+# bronze, silver, gold, artifacts -- and the state bucket is infrastructure *of*
+# the infrastructure, not a layer of it. Bundling them would also mean that
+# instantiating this module for a second environment would silently produce a
+# second state bucket in the bargain.
 #
 # Naming convention: crypto-<purpose>-<account_id>.
 # The account id suffix is not decoration: S3 bucket names are globally unique
@@ -20,7 +27,11 @@
 # These buckets are the single source of truth for their own names. Nothing else
 # in this codebase reconstructs a bucket name from variables; everything
 # references aws_s3_bucket.<x>.id / .arn. That duplication is what made the
-# Phase 1 state recovery dangerous.
+# Phase 1 state recovery dangerous. Consumers read them from outputs.tf.
+#
+# The Glue job scripts that live in the artifacts bucket are NOT declared here
+# either -- an aws_s3_object is a deployment artifact of the job that runs it, so
+# they sit in modules/processing/ alongside the aws_glue_job resources.
 # =============================================================================
 
 locals {
@@ -299,43 +310,4 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
       days_after_initiation = 7
     }
   }
-}
-
-# -----------------------------------------------------------------------------
-# Glue job scripts -- uploaded from the repo into the artifacts bucket
-# -----------------------------------------------------------------------------
-resource "aws_s3_object" "silver_glue_script" {
-  bucket                 = aws_s3_bucket.artifacts.id
-  key                    = "jobs/silver_glue_job.py"
-  source                 = "../glue_jobs_silver_gold/silver/silver_glue_job.py"
-  etag                   = filemd5("../glue_jobs_silver_gold/silver/silver_glue_job.py")
-  content_type           = "text/x-python"
-  server_side_encryption = "AES256"
-}
-
-resource "aws_s3_object" "gold_features_base_glue_script" {
-  bucket                 = aws_s3_bucket.artifacts.id
-  key                    = "jobs/gold_features_base_job.py"
-  source                 = "../glue_jobs_silver_gold/gold/gold_features_base_job.py"
-  etag                   = filemd5("../glue_jobs_silver_gold/gold/gold_features_base_job.py")
-  content_type           = "text/x-python"
-  server_side_encryption = "AES256"
-}
-
-resource "aws_s3_object" "gold_ml_training_glue_script" {
-  bucket                 = aws_s3_bucket.artifacts.id
-  key                    = "jobs/gold_ml_training_job.py"
-  source                 = "../glue_jobs_silver_gold/gold/gold_ml_training_job.py"
-  etag                   = filemd5("../glue_jobs_silver_gold/gold/gold_ml_training_job.py")
-  content_type           = "text/x-python"
-  server_side_encryption = "AES256"
-}
-
-resource "aws_s3_object" "gold_ohlc_glue_script" {
-  bucket                 = aws_s3_bucket.artifacts.id
-  key                    = "jobs/gold_ohlc_h_d_w_m.py"
-  source                 = "../glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py"
-  etag                   = filemd5("../glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py")
-  content_type           = "text/x-python"
-  server_side_encryption = "AES256"
 }

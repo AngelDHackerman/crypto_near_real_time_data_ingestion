@@ -1,3 +1,20 @@
+# =============================================================================
+# Observability module -- failure alerting  (roadmap.md, Phase 3)
+#
+# An EventBridge rule watches the state machine for FAILED / TIMED_OUT /
+# ABORTED and publishes to an SNS topic.
+#
+# TWO KNOWN PROBLEMS, both deliberately left for Phase 11 rather than fixed
+# here, because Phase 3's acceptance criterion is a zero-diff plan:
+#
+#   1. The topic policy allows only events.amazonaws.com to publish. The moment
+#      CloudWatch alarms are added they will publish as cloudwatch.amazonaws.com
+#      and fail SILENTLY.
+#   2. One topic will end up mixing two audiences -- "pipeline failed"
+#      (operational) and "buy signal on BTC" (business). Phase 11 splits this
+#      into -ops-alerts and -model-signals before the email becomes noise.
+# =============================================================================
+
 # If StateFunctions run fails, send alert about failure
 # 1) SNS topic + suscripción
 resource "aws_sns_topic" "sfn_alerts" {
@@ -36,7 +53,7 @@ resource "aws_cloudwatch_event_rule" "sfn_failed" {
     "source" : ["aws.states"],
     "detail-type" : ["Step Functions Execution Status Change"],
     "detail" : {
-      "stateMachineArn" : [aws_sfn_state_machine.daily_gold_pipeline.arn],
+      "stateMachineArn" : [var.state_machine_arn],
       "status" : [
         "FAILED",
         "TIMED_OUT",
@@ -51,6 +68,7 @@ resource "aws_cloudwatch_event_target" "sfn_failed_to_sns" {
   rule = aws_cloudwatch_event_rule.sfn_failed.name
   arn  = aws_sns_topic.sfn_alerts.arn
 
-  # See note in eventBridge.tf: pinned to the AWS-generated ID for the import.
-  target_id = "terraform-20251012021255924500000001"
+  # Was "terraform-20251012021255924500000001". See the note in
+  # modules/ingestion/main.tf -- pinned for the Phase 1 import, readable now.
+  target_id = "sfn-failure-to-sns"
 }
