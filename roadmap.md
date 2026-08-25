@@ -55,12 +55,13 @@ now literally nothing to lose by staying asleep.
 2. Kinesis ingestion is deployed (Phase 5 done, streaming path verified end to end).
    **Still open — the only remaining precondition.**
 
-Phase 3 deliberately did not wake anything: all three rules were re-checked in
-AWS after the apply and are still `DISABLED`.
-
 Only then are the EventBridge rules re-enabled, deliberately and as code — by
 flipping `eventbridge_rule_enabled` to `true`, never by clicking in the console.
 Until that moment the correct state of this project is **asleep**.
+
+Phase 3 deliberately did not wake anything, and this was checked rather than
+assumed: all three rules were re-read from AWS after the apply and are still
+`DISABLED`.
 
 ---
 
