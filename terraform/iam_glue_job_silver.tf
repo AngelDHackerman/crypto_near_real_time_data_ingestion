@@ -1,5 +1,5 @@
 resource "aws_iam_role" "glue_role" {
-  name = "AWSGlueServiceRole-cmc-${var.environment}"
+  name               = "AWSGlueServiceRole-cmc-${var.environment}"
   assume_role_policy = data.aws_iam_policy_document.glue_trust.json
 }
 
@@ -7,7 +7,7 @@ data "aws_iam_policy_document" "glue_trust" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
-      type = "Service"
+      type        = "Service"
       identifiers = ["glue.amazonaws.com"]
     }
   }
@@ -19,29 +19,57 @@ resource "aws_iam_role_policy_attachment" "glue_service" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
 }
 
-# Allow least previliges in S3
+# Least privilege for the Silver job: read Bronze, write Silver, and touch only
+# the two prefixes it actually needs inside artifacts.
+#
+# This used to grant PutObject/DeleteObject on artifacts/* with no prefix -- i.e.
+# the ETL role could delete anything in the artifacts bucket, including the Glue
+# scripts it runs. Scoped to jobs/ (read) and tmp/ (write) instead.
 data "aws_iam_policy_document" "glue_s3" {
   statement {
-    actions = ["s3:ListBucket"]
+    sid     = "S3ListBuckets"
+    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
     resources = [
-        "arn:aws:s3:::${var.bucket_lake_raw_name}",
-        "arn:aws:s3:::${var.bucket_silver_gold_name}",
-        "arn:aws:s3:::${var.bucket_artifacts_name}",
+      aws_s3_bucket.bronze.arn,
+      aws_s3_bucket.silver.arn,
+      aws_s3_bucket.artifacts.arn,
     ]
   }
+
   statement {
+    sid       = "S3ReadBronze"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.bronze.arn}/*"]
+  }
+
+  statement {
+    sid = "S3WriteSilver"
     actions = [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject",
-        "s3:AbortMultipartUpload",
-        "s3:ListMultipartUploadParts"
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:AbortMultipartUpload",
+      "s3:ListMultipartUploadParts"
     ]
-    resources = [
-      "arn:aws:s3:::${var.bucket_lake_raw_name}/*",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/*",
-      "arn:aws:s3:::${var.bucket_artifacts_name}/*"
+    resources = ["${aws_s3_bucket.silver.arn}/*"]
+  }
+
+  statement {
+    sid       = "S3ReadJobScript"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/jobs/*"]
+  }
+
+  statement {
+    sid = "S3WriteSparkTempDir"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:AbortMultipartUpload",
+      "s3:ListMultipartUploadParts"
     ]
+    resources = ["${aws_s3_bucket.artifacts.arn}/tmp/*"]
   }
 }
 

@@ -18,36 +18,22 @@ resource "aws_iam_role" "glue_crawler_role" {
 # Least-privilege policy for Glue crawler
 data "aws_iam_policy_document" "glue_crawler_policy" {
 
-  # Allow listing the bucket, but only for specific prefixes (silver/gold)
+  # Silver only. Gold lives in its own bucket now and uses partition projection,
+  # so the crawler has no business there -- the prefix conditions that used to
+  # keep these two apart inside one shared bucket are gone.
   statement {
-    sid     = "S3ListBucketByPrefix"
+    sid = "S3ListSilverBucket"
     actions = [
-      "s3:ListBucket", 
+      "s3:ListBucket",
       "s3:GetBucketLocation"
     ]
-    resources = [
-      "arn:aws:s3:::${var.bucket_silver_gold_name}"  # bucket-level ARN
-    ]
-    condition {
-      test     = "StringLike"
-      variable = "s3:prefix"
-      values = [
-        "${var.silver_prefix}/",
-        "${var.silver_prefix}/*",
-        "${var.gold_prefix}/",
-        "${var.gold_prefix}/*"
-      ]
-    }
+    resources = [aws_s3_bucket.silver.arn]
   }
 
-  # Allow reading objects only under the silver/ and gold/ prefixes
   statement {
-    sid     = "S3ReadObjectsUnderSilverGold"
-    actions = ["s3:GetObject"]
-    resources = [
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.silver_prefix}/*",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}/*"
-    ]
+    sid       = "S3ReadSilverObjects"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.silver.arn}/*"]
   }
 
   # Glue Catalog actions - restrict
@@ -62,7 +48,7 @@ data "aws_iam_policy_document" "glue_crawler_policy" {
   }
 
   statement {
-    sid     = "GlueCatalogAccessTables"
+    sid = "GlueCatalogAccessTables"
     actions = [
       "glue:GetTable",
       "glue:GetTables",
@@ -75,8 +61,8 @@ data "aws_iam_policy_document" "glue_crawler_policy" {
 
   # CloudWatch logs
   statement {
-    sid     = "CWLogs"
-    actions = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents","logs:DescribeLogStreams"]
+    sid       = "CWLogs"
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
     resources = ["*"]
   }
 }

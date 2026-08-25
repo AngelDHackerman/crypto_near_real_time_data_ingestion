@@ -1,108 +1,146 @@
-# --- BRONZE ---
-resource "aws_s3_bucket" "lake_raw_data" {
-  bucket = "lake-raw-data-bronze-${var.environment}"
+# =============================================================================
+# Storage -- one bucket per layer  (roadmap.md, Phase 2.1)
+#
+# Naming convention: crypto-<purpose>-<account_id>.
+# The account id suffix is not decoration: S3 bucket names are globally unique
+# across every AWS account, and the bare names (crypto-tf-state, crypto-tfstate)
+# are already registered by strangers. The suffix makes the name ours by
+# construction.
+#
+# What goes where -- the standing rule for the whole project:
+#   bronze / silver / gold : that layer's data, and nothing else
+#   artifacts              : everything that is NOT lake data -- Glue job scripts,
+#                            Lambda and producer packages, Spark tmp/ and Spark UI
+#                            logs, Athena query results, and any future one-off
+#   crypto-tf-state-*      : Terraform state only. No runtime role gets access.
+#
+# The top-level prefix inside a lake bucket is the SOURCE (cmc/, binance/), never
+# the layer -- the bucket already names the layer.
+#
+# These buckets are the single source of truth for their own names. Nothing else
+# in this codebase reconstructs a bucket name from variables; everything
+# references aws_s3_bucket.<x>.id / .arn. That duplication is what made the
+# Phase 1 state recovery dangerous.
+# =============================================================================
 
-  tags = {
-    Name        = "lake-raw-data-bronze-${var.environment}"
+locals {
+  bucket_tags = {
     Environment = var.environment
     Owner       = "Angel Hackerman"
     Project     = "Crypto Near Real Time Data Ingestion"
   }
+}
 
-  # Guard rail for the state re-import: bucket names are immutable, so any
-  # mismatch between terraform.tfvars and reality would otherwise be planned
-  # as destroy+recreate, wiping the data lake.
+# -----------------------------------------------------------------------------
+# BRONZE -- raw ingested payloads
+# -----------------------------------------------------------------------------
+resource "aws_s3_bucket" "bronze" {
+  bucket = "crypto-bronze-layer-${var.aws_account_id}"
+
+  tags = merge(local.bucket_tags, {
+    Name  = "crypto-bronze-layer-${var.aws_account_id}"
+    Layer = "bronze"
+  })
+
   lifecycle {
     prevent_destroy = true
   }
-
 }
 
-resource "aws_s3_bucket_versioning" "lake_raw_data" {
-  bucket = aws_s3_bucket.lake_raw_data.id
+resource "aws_s3_bucket_versioning" "bronze" {
+  bucket = aws_s3_bucket.bronze.id
   versioning_configuration { status = "Enabled" }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "lake_raw_data" {
-  bucket = aws_s3_bucket.lake_raw_data.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "bronze" {
+  bucket = aws_s3_bucket.bronze.id
   rule {
     apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "lake_raw_data" {
-  bucket = aws_s3_bucket.lake_raw_data.id
+resource "aws_s3_bucket_public_access_block" "bronze" {
+  bucket                  = aws_s3_bucket.bronze.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
 
+resource "aws_s3_bucket_lifecycle_configuration" "bronze" {
+  bucket = aws_s3_bucket.bronze.id
+
+  # Bucket-level, not prefix-filtered. The old config filtered on "top10/..."
+  # prefixes, which meant any prefix rename silently switched the rule off.
   rule {
-    id      = "bronze-30d-to-glacier-ir"
-    status  = "Enabled"
+    id     = "bronze-30d-to-glacier-ir"
+    status = "Enabled"
 
-    filter { } # applies to all the bucket 
+    filter {}
 
     transition {
-      days            = 30
-      storage_class   = "GLACIER_IR" # Glacier Instant Retrival
-    } 
-
-    # Clean Incomplete Multipart Loads (save some $)
-    abort_incomplete_multipart_upload { 
-      days_after_initiation = 7 
+      days          = 30
+      storage_class = "GLACIER_IR"
     }
 
-    # remove no current versions after 365 days
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
     noncurrent_version_expiration {
       noncurrent_days = 365
     }
-  } 
+  }
 }
 
-# --- CURATED (Silver/Gold) ---
-resource "aws_s3_bucket" "lake_curated_data" {
-  bucket = "lake-curated-data-silver-gold-${var.environment}"
+# -----------------------------------------------------------------------------
+# SILVER -- cleaned and typed tables
+# -----------------------------------------------------------------------------
+resource "aws_s3_bucket" "silver" {
+  bucket = "crypto-silver-layer-${var.aws_account_id}"
 
-  tags = {
-    Name        = "lake-curated-data-silver-gold-${var.environment}"
-    Environment = var.environment
-    Owner       = "Angel Hackerman"
-    Project     = "Crypto Near Real Time Data Ingestion"
-  }
+  tags = merge(local.bucket_tags, {
+    Name  = "crypto-silver-layer-${var.aws_account_id}"
+    Layer = "silver"
+  })
 
-  # Guard rail for the state re-import: bucket names are immutable, so any
-  # mismatch between terraform.tfvars and reality would otherwise be planned
-  # as destroy+recreate, wiping the data lake.
   lifecycle {
     prevent_destroy = true
   }
-
 }
 
-resource "aws_s3_bucket_versioning" "lake_curated_data" {
-  bucket = aws_s3_bucket.lake_curated_data.id
+resource "aws_s3_bucket_versioning" "silver" {
+  bucket = aws_s3_bucket.silver.id
   versioning_configuration { status = "Enabled" }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "lake_curated_data" {
-  bucket = aws_s3_bucket.lake_curated_data.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "silver" {
+  bucket = aws_s3_bucket.silver.id
   rule {
     apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "lake_curated_data" {
-  bucket = aws_s3_bucket.lake_curated_data.id
+resource "aws_s3_bucket_public_access_block" "silver" {
+  bucket                  = aws_s3_bucket.silver.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
 
-  # Rule JUST for the Silver prefix
+resource "aws_s3_bucket_lifecycle_configuration" "silver" {
+  bucket = aws_s3_bucket.silver.id
+
   rule {
-    id        = "silver-to-onezone-ia"
-    status    = "Enabled"
+    id     = "silver-360d-to-onezone-ia"
+    status = "Enabled"
 
-    filter {
-      prefix = "top10/silver/"
-    }
+    filter {}
 
     transition {
-      days            = 360
-      storage_class   = "ONEZONE_IA"
+      days          = 360
+      storage_class = "ONEZONE_IA"
     }
 
     abort_incomplete_multipart_upload {
@@ -113,81 +151,126 @@ resource "aws_s3_bucket_lifecycle_configuration" "lake_curated_data" {
       noncurrent_days = 180
     }
   }
-
-  # Gold: without transition (it will stay in Standard tier)
-  rule {
-    id        = "gold-keep-standard"
-    status    = "Enabled"
-    filter {
-      prefix = "top10/gold/"
-    }
-    # clean multipart 
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-    # removed passed versioning
-    noncurrent_version_expiration {
-      noncurrent_days = 90
-  }
-  }
 }
 
-# --- ARTIFACTS ---
-resource "aws_s3_bucket" "artifacts-crypto" {
-  bucket = "artifacts-crypto-data-${var.environment}"
+# -----------------------------------------------------------------------------
+# GOLD -- feature/ML datasets. Stays in Standard: this is what gets queried.
+# -----------------------------------------------------------------------------
+resource "aws_s3_bucket" "gold" {
+  bucket = "crypto-gold-layer-${var.aws_account_id}"
 
-  tags = {
-    Name        = "artifacts-crypto-data-${var.environment}"
-    Environment = var.environment
-    Owner       = "Angel Hackerman"
-    Project     = "Crypto Near Real Time Data Ingestion"
-  }
+  tags = merge(local.bucket_tags, {
+    Name  = "crypto-gold-layer-${var.aws_account_id}"
+    Layer = "gold"
+  })
 
-  # Guard rail for the state re-import: bucket names are immutable, so any
-  # mismatch between terraform.tfvars and reality would otherwise be planned
-  # as destroy+recreate, wiping the data lake.
   lifecycle {
     prevent_destroy = true
   }
-
 }
 
-resource "aws_s3_bucket_versioning" "artifacts-crypto" {
-  bucket = aws_s3_bucket.artifacts-crypto.id
+resource "aws_s3_bucket_versioning" "gold" {
+  bucket = aws_s3_bucket.gold.id
   versioning_configuration { status = "Enabled" }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts-crypto" {
-  bucket = aws_s3_bucket.artifacts-crypto.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "gold" {
+  bucket = aws_s3_bucket.gold.id
   rule {
     apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
-  bucket = aws_s3_bucket.artifacts-crypto.id
+resource "aws_s3_bucket_public_access_block" "gold" {
+  bucket                  = aws_s3_bucket.gold.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "gold" {
+  bucket = aws_s3_bucket.gold.id
 
   rule {
-    id      = "expire-old-artifacts"
-    status  = "Enabled"
-    filter {
-      prefix = ""  # applies to all the bucket
+    id     = "gold-keep-standard"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
 
     noncurrent_version_expiration {
       noncurrent_days = 90
     }
+  }
+}
+
+# -----------------------------------------------------------------------------
+# ARTIFACTS -- everything that is not lake data
+# -----------------------------------------------------------------------------
+resource "aws_s3_bucket" "artifacts" {
+  bucket = "crypto-artifacts-${var.aws_account_id}"
+
+  tags = merge(local.bucket_tags, {
+    Name  = "crypto-artifacts-${var.aws_account_id}"
+    Layer = "artifacts"
+  })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  bucket                  = aws_s3_bucket.artifacts.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    id     = "expire-old-artifact-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }
   }
 
+  # Query results are regenerable output, not artifacts. This prefix filter is
+  # legitimate: it scopes a rule to one kind of content inside the bucket, it is
+  # not standing in for a missing bucket boundary.
   rule {
-    id = "delete-athena-query-results"
+    id     = "delete-athena-query-results"
     status = "Enabled"
 
     filter {
-      prefix = "athena/queries/"
+      prefix = "${var.athena_results_prefix}/"
     }
 
     expiration {
@@ -198,44 +281,61 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
       days_after_initiation = 7
     }
   }
+
+  # Spark scratch. Glue writes here on every run and never cleans up.
+  rule {
+    id     = "delete-spark-scratch"
+    status = "Enabled"
+
+    filter {
+      prefix = "tmp/"
+    }
+
+    expiration {
+      days = 14
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
-# Upload silver glue job to S3
+# -----------------------------------------------------------------------------
+# Glue job scripts -- uploaded from the repo into the artifacts bucket
+# -----------------------------------------------------------------------------
 resource "aws_s3_object" "silver_glue_script" {
-  bucket                  = var.bucket_artifacts_name
-  key                     = "jobs/silver_glue_job.py"
-  source                  = "../glue_jobs_silver_gold/silver/silver_glue_job.py"
-  etag                    = filemd5("../glue_jobs_silver_gold/silver/silver_glue_job.py")
-  content_type            = "text/x-python"
-  server_side_encryption  = "AES256"
+  bucket                 = aws_s3_bucket.artifacts.id
+  key                    = "jobs/silver_glue_job.py"
+  source                 = "../glue_jobs_silver_gold/silver/silver_glue_job.py"
+  etag                   = filemd5("../glue_jobs_silver_gold/silver/silver_glue_job.py")
+  content_type           = "text/x-python"
+  server_side_encryption = "AES256"
 }
 
-# Upload gold features base glue job to S3
 resource "aws_s3_object" "gold_features_base_glue_script" {
-  bucket                  = var.bucket_artifacts_name
-  key                     = "jobs/gold_features_base_job.py"
-  source                  = "../glue_jobs_silver_gold/gold/gold_features_base_job.py"
-  etag                    = filemd5("../glue_jobs_silver_gold/gold/gold_features_base_job.py")
-  content_type            = "text/x-python"
-  server_side_encryption  = "AES256"
+  bucket                 = aws_s3_bucket.artifacts.id
+  key                    = "jobs/gold_features_base_job.py"
+  source                 = "../glue_jobs_silver_gold/gold/gold_features_base_job.py"
+  etag                   = filemd5("../glue_jobs_silver_gold/gold/gold_features_base_job.py")
+  content_type           = "text/x-python"
+  server_side_encryption = "AES256"
 }
 
-# Upload gold machine learning glue job to S3
 resource "aws_s3_object" "gold_ml_training_glue_script" {
-  bucket                  = var.bucket_artifacts_name
-  key                     = "jobs/gold_ml_training_job.py"
-  source                  = "../glue_jobs_silver_gold/gold/gold_ml_training_job.py"
-  etag                    = filemd5("../glue_jobs_silver_gold/gold/gold_ml_training_job.py")
-  content_type            = "text/x-python"
-  server_side_encryption  = "AES256"
+  bucket                 = aws_s3_bucket.artifacts.id
+  key                    = "jobs/gold_ml_training_job.py"
+  source                 = "../glue_jobs_silver_gold/gold/gold_ml_training_job.py"
+  etag                   = filemd5("../glue_jobs_silver_gold/gold/gold_ml_training_job.py")
+  content_type           = "text/x-python"
+  server_side_encryption = "AES256"
 }
 
-# Upload gold ohlc glue job to S3
 resource "aws_s3_object" "gold_ohlc_glue_script" {
-  bucket                  = var.bucket_artifacts_name
-  key                     = "jobs/gold_ohlc_h_d_w_m.py"
-  source                  = "../glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py"
-  etag                    = filemd5("../glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py")
-  content_type            = "text/x-python"
-  server_side_encryption  = "AES256"
+  bucket                 = aws_s3_bucket.artifacts.id
+  key                    = "jobs/gold_ohlc_h_d_w_m.py"
+  source                 = "../glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py"
+  etag                   = filemd5("../glue_jobs_silver_gold/gold/gold_ohlc_h_d_w_m.py")
+  content_type           = "text/x-python"
+  server_side_encryption = "AES256"
 }
