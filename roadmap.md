@@ -61,7 +61,7 @@ Until that moment the correct state of this project is **asleep**.
 | 0 | Unblock HTTPS egress from WSL | ✅ Done | — | `aws sts get-caller-identity` works |
 | 1 | Recover `terraform.tfstate` by import | ✅ Done | `phase-1/state-recovery-and-roadmap` → `master` | 55 imported, 6 added, 3 changed, **0 destroyed**; plan clean |
 | 2 | Remote backend on S3 | ⬜ Not started | | Kills the local-state risk for good. Dedicated bucket, **not** `artifacts` |
-| 2.1 | One bucket per layer, clean slate | ✅ Done | `master` | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
+| 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
 | 3 | Terraform refactor into modules | ⬜ Not started | | Uses `moved {}` blocks, zero-diff plan |
 | 4 | Data source strategy (Binance WS + CMC) | ⬜ Not started | | Decision phase, no infra. Fixed 50-asset list |
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ⬜ Not started | | Depends on 4. **Project wakes up here.** Producer hosting undecided |
