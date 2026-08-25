@@ -26,90 +26,67 @@ resource "aws_iam_role" "glue_gold_base" {
 # - Leer Parquet en GOLD_FEATURES_BASE (input del job ML)
 # - Escribir en GOLD (prefijo padre y subcarpetas: features_base y ml_training)
 # - Logs en CloudWatch
+# Least privilege for the Gold jobs: read Silver, read+write Gold, script from
+# artifacts/jobs, scratch in artifacts/tmp.
+#
+# Every bucket here is single-purpose now, so the resources are plain bucket ARNs.
+# That deletes the nine-ARN "$folder$" block the old policy needed to cover
+# top10/gold, top10/gold_$folder$, top10/gold/* and the same triple for each
+# sub-prefix -- an artifact of Silver and Gold sharing one bucket.
 data "aws_iam_policy_document" "glue_gold_policy" {
 
-  # ---- S3: List buckets (sin condición) ----
   statement {
-    sid     = "S3ListDataBucket"
+    sid     = "S3ListBuckets"
     actions = ["s3:ListBucket", "s3:GetBucketLocation"]
-    resources = ["arn:aws:s3:::${var.bucket_silver_gold_name}"]
+    resources = [
+      aws_s3_bucket.silver.arn,
+      aws_s3_bucket.gold.arn,
+      aws_s3_bucket.artifacts.arn,
+    ]
   }
 
   statement {
-    sid     = "S3ListArtifactsBucket"
-    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
-    resources = ["arn:aws:s3:::${var.bucket_artifacts_name}"]
+    sid       = "S3ReadSilver"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.silver.arn}/*"]
   }
 
-  # ---- Artifacts: escribir/borrar en TempDir ----
+  # Covers both directions: gold_features_base is written by one job and read as
+  # input by the OHLC and ML jobs.
   statement {
-  sid     = "S3GetArtifactsScript"
-  actions = ["s3:GetObject"]
-  resources = [
-    "arn:aws:s3:::${var.bucket_artifacts_name}/jobs/*"
-  ]
-}
-  statement {
-    sid     = "S3WriteArtifactsTempDir"
+    sid = "S3ReadWriteGold"
     actions = [
+      "s3:GetObject",
       "s3:PutObject",
       "s3:DeleteObject",
       "s3:AbortMultipartUpload",
-      "s3:GetObject"
+      "s3:ListMultipartUploadParts"
     ]
-    resources = [
-      "arn:aws:s3:::${var.bucket_artifacts_name}/tmp/*"
-    ]
+    resources = ["${aws_s3_bucket.gold.arn}/*"]
   }
 
-  # ---- Silver: lectura de Parquet (si algún job lo usa) ----
   statement {
-    sid     = "S3ReadSilver"
-    actions = ["s3:GetObject"]
-    resources = [
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.silver_prefix}/*"
-    ]
+    sid       = "S3ReadJobScript"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/jobs/*"]
   }
 
-  # ---- (NEW) Gold Features Base: lectura (input del job ML) ----
   statement {
-    sid     = "S3ReadGoldFeaturesBase"
-    actions = ["s3:GetObject"]
-    resources = [
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}/*"
-    ]
-  }
-
-  # ---- Gold: escritura (prefijo padre + subcarpetas) ----
-  # Cubre marcadores $folder$, _SUCCESS, _temporary, etc.
-  statement {
-    sid     = "S3WriteGoldArea"
+    sid = "S3WriteSparkTempDir"
     actions = [
+      "s3:GetObject",
       "s3:PutObject",
       "s3:DeleteObject",
-      "s3:AbortMultipartUpload"
+      "s3:AbortMultipartUpload",
+      "s3:ListMultipartUploadParts"
     ]
-    resources = [
-      # Prefijo padre (top10/gold)
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}_$folder$",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_prefix}/*",
-
-      # subprefijo específico de features_base
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}_$folder$",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_features_prefix}/*",
-
-      # subprefijo específico de ml_training
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_ml_prefix}",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_ml_prefix}_$folder$",
-      "arn:aws:s3:::${var.bucket_silver_gold_name}/${var.gold_ml_prefix}/*"
-    ]
+    resources = ["${aws_s3_bucket.artifacts.arn}/tmp/*"]
   }
 
-  # ---- Logs Glue → CloudWatch ----
+  # Resource = "*" justified: Glue creates its own log group and stream names at
+  # runtime under /aws-glue/jobs/*, which are not known at plan time.
   statement {
-    sid     = "CloudWatchLogs"
+    sid = "CloudWatchLogs"
     actions = [
       "logs:CreateLogGroup",
       "logs:CreateLogStream",

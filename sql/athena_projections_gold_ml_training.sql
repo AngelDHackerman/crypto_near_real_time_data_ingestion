@@ -41,7 +41,7 @@ STORED AS INPUTFORMAT
   'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat'
 OUTPUTFORMAT
   'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat'
-LOCATION 's3://lake-curated-data-silver-gold-crypto/top10/gold/gold_ml_training/';
+LOCATION 's3://crypto-gold-layer-913524903233/gold_ml_training/';
 
 -- Activar Partition Projection
 ALTER TABLE crypto_gold_db.gold_ml_training SET TBLPROPERTIES (
@@ -53,5 +53,5 @@ ALTER TABLE crypto_gold_db.gold_ml_training SET TBLPROPERTIES (
   'projection.dt.interval.unit'='DAYS',
   'projection.asset_id.type'='integer',
   'projection.asset_id.range'='1,9999',
-  'storage.location.template'='s3://lake-curated-data-silver-gold-crypto/top10/gold/gold_ml_training/dt=${dt}/asset_id=${asset_id}/'
+  'storage.location.template'='s3://crypto-gold-layer-913524903233/gold_ml_training/dt=${dt}/asset_id=${asset_id}/'
 );

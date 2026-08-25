@@ -28,4 +28,4 @@ PARTITIONED BY (
   asset_id  int
 )
 STORED AS PARQUET
-LOCATION 's3://lake-curated-data-silver-gold-crypto/top10/gold/gold_features_base/';
+LOCATION 's3://crypto-gold-layer-913524903233/gold_features_base/';

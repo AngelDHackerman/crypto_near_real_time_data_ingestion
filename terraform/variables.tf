@@ -18,12 +18,8 @@ variable "secrets_manager_name" {
   description = "secrets manager name"
   type        = string
 }
-variable "bucket_lake_raw_name" {
-  description = "Lake Raw Bucket Name"
-  type        = string
-}
 variable "bronze_prefix" {
-  description = "prefix for bronze data"
+  description = "Top-level prefix inside the bronze bucket. This is the SOURCE, not the layer -- the bucket already names the layer. \"cmc\" today; \"binance\" joins it in Phase 5."
   type        = string
 }
 variable "top10_list_symbol" {
@@ -46,23 +42,8 @@ variable "eventbridge_rule_enabled" {
   default     = true
 }
 
-variable "bucket_silver_gold_name" {
-  description = "Bucket for the silver/gold data"
-  type        = string
-}
-
-variable "bucket_artifacts_name" {
-  description = "code for glue job"
-  type        = string
-}
-
 variable "silver_prefix" {
-  description = "prefix for silver data"
-  type        = string
-}
-
-variable "gold_prefix" {
-  description = "prefix for gold data"
+  description = "Top-level prefix inside the silver bucket. Source-based, same rule as bronze_prefix."
   type        = string
 }
 
@@ -116,10 +97,6 @@ variable "glue_number_of_workers" {
 }
 
 # Prefijos para Spark UI y TempDir dentro del bucket GOLD
-variable "gold_spark_ui_prefix" {
-  type    = string
-  default = "top10/_spark_ui/gold_features_base"
-}
 variable "sfn_daily_schedule_cron" {
   description = "CRON de EventBridge en UTC (min hora dia mes diaSemana año)"
   type        = string

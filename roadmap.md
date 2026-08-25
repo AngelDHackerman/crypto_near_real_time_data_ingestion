@@ -16,6 +16,12 @@ demonstration, not an investment tool.
   written justification in a comment.
 - Serverless first. Avoid anything that bills 24/7 unless the demo requires it,
   and when it does, make the cost explicit and time-boxed.
+- **One bucket per purpose, and the purpose is in the name.** A medallion bucket
+  holds only its own layer's data. Everything that is *not* lake data — Glue job
+  scripts, Lambda and producer packages, Spark `tmp/` and Spark UI logs, Athena
+  query results, and any other one-off — lives in the **artifacts** bucket. The
+  Terraform state bucket holds state and nothing else, and no runtime role is
+  granted access to it. See Phase 2.1.
 
 **Account:** `913524903233` · **Region:** `us-east-1` · **Env suffix:** `crypto`
 
@@ -32,6 +38,10 @@ This is intentional, not an outage. Waking it up while the code is still being
 restructured would mean accumulating data in a Bronze layout that Phase 6 is
 going to change anyway, and burning CMC credits on an asset list that Phase 4 is
 going to replace.
+
+Stronger still: **Phase 2.1 deletes the current lake outright.** Anything ingested
+between now and then is thrown away with it, so there is nothing to lose by
+staying asleep and nothing to gain by waking up early.
 
 **Wake-up conditions — both must be met:**
 
@@ -50,11 +60,12 @@ Until that moment the correct state of this project is **asleep**.
 |---|-------|--------|-------------|-------|
 | 0 | Unblock HTTPS egress from WSL | ✅ Done | — | `aws sts get-caller-identity` works |
 | 1 | Recover `terraform.tfstate` by import | ✅ Done | `phase-1/state-recovery-and-roadmap` → `master` | 55 imported, 6 added, 3 changed, **0 destroyed**; plan clean |
-| 2 | Remote backend on S3 | ⬜ Not started | | Kills the local-state risk for good |
+| 2 | Remote backend on S3 | ⬜ Not started | | Kills the local-state risk for good. Dedicated bucket, **not** `artifacts` |
+| 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
 | 3 | Terraform refactor into modules | ⬜ Not started | | Uses `moved {}` blocks, zero-diff plan |
 | 4 | Data source strategy (Binance WS + CMC) | ⬜ Not started | | Decision phase, no infra. Fixed 50-asset list |
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ⬜ Not started | | Depends on 4. **Project wakes up here.** Producer hosting undecided |
-| 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler |
+| 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler. Buckets/prefixes already settled in 2.1 |
 | 7 | Feature engineering | ⬜ Not started | | Extends existing Gold jobs |
 | 8 | Model training | ⬜ Not started | | Serverless, no VPC |
 | 9 | Model registry | ⬜ Not started | | |
@@ -146,11 +157,31 @@ pipeline is not currently running. `terraform.tfvars` sets
 **Goal:** eliminate the root cause of this whole mess. The state is still a local
 file; one more machine migration and it is lost again.
 
+**Why a dedicated bucket and not the existing `artifacts-crypto-data-crypto`.**
+Reusing it was considered and rejected. Three reasons, all found in this
+repository's own code rather than in style preference:
+
+1. Its lifecycle rule `expire-old-artifacts` (`s3.tf`) uses `filter { prefix = "" }`
+   with `noncurrent_version_expiration = 90` — it applies to the **whole bucket**.
+   Version history is the only thing that saves a corrupted apply, and in that
+   bucket the entire state history would carry a 90-day fuse. Working around it
+   means carving prefix exceptions into lifecycle rules. Not doing that juggling.
+2. The Silver Glue role (`iam_glue_job_silver.tf`) holds `s3:PutObject` and
+   `s3:DeleteObject` on `artifacts.../*` with **no prefix restriction**. A data
+   processing role must not be able to delete the Terraform state.
+3. Athena already writes query results there on a 30-day expiry. Adding state
+   would make it a bucket doing four unrelated jobs under one blast radius.
+
+A bucket itself costs nothing — storage and requests bill identically either way.
+So the state gets its own bucket, and **no runtime role is ever granted access
+to it**.
+
 **Scope**
 
-- Create an S3 state bucket (`crypto-tf-state-913524903233`, mirroring the
-  existing `loteria-tf-state-913524903233` from the neighbour project) with
-  versioning enabled, SSE, and public access fully blocked.
+- Create an S3 state bucket, `crypto-tf-state-913524903233`, with versioning
+  enabled, SSE, and public access fully blocked. The account-id suffix is what makes
+  the name safe: bare `crypto-tf-state` and `crypto-tfstate` are already taken by
+  other AWS accounts, since S3 names are global rather than per-account.
 - Chicken-and-egg: create the bucket with a small bootstrap config using local
   state, then `terraform import` it into the main config.
 - Add the `backend "s3"` block using **native S3 locking** (`use_lockfile = true`)
@@ -180,6 +211,180 @@ file; one more machine migration and it is lost again.
 
 ---
 
+## Phase 2.1 — One bucket per layer, clean slate ✅
+
+**Goal:** fix the storage layout before anything else is built on top of it.
+Today Silver and Gold share a single bucket, the artifacts bucket is called
+`artifacts-crypto-data-crypto` (the word twice), and every lifecycle rule and IAM
+statement is assembled out of prefix filters. Bucket names are immutable, so this
+is not a rename: it is new buckets plus the deliberate deletion of the old ones.
+
+**Decided: the current data is deleted, not migrated.** The lake holds 261,782
+bronze objects (587 MB) and 4,268 curated objects (140 MB) — an incomplete series,
+over a provisional 11-asset list that Phase 4 replaces with a curated 50, produced
+by a polling design that Phase 5 replaces with streaming. It is not training data
+for any model this project will ship, and carrying it forward would preserve a
+dataset that gets thrown away anyway. The project starts from zero. This is also
+the cheapest moment it will ever be: the pipeline is dormant and nothing depends
+on the current objects.
+
+**Naming convention:** `crypto-<purpose>-<account_id>`, with the medallion buckets
+carrying an explicit `-layer` suffix. Same shape as the neighbour project's
+`loteria-tf-state-913524903233` in this shared account.
+
+The account id is not decoration. **S3 bucket names are globally unique across
+every AWS account on earth**, and the id suffix is the standard way to guarantee a
+name is free — a project-scoped name like `crypto-tf-state` is already taken by a
+stranger, as was verified before settling on this convention. Dropping the suffix
+would mean racing the rest of the internet for generic names; keeping it means the
+name is ours by construction.
+
+| Bucket | What it holds |
+|---|---|
+| `crypto-bronze-layer-913524903233` | Raw ingested payloads, nothing else |
+| `crypto-silver-layer-913524903233` | Cleaned and typed Silver tables, nothing else |
+| `crypto-gold-layer-913524903233` | Gold datasets: features base, OHLC, ML training |
+| `crypto-artifacts-913524903233` | **Everything that is not lake data** — Glue job scripts, Lambda and producer packages, Spark `tmp/`, Spark UI logs, Athena query results, and any future one-off |
+| `crypto-tf-state-913524903233` | Terraform state only (created in Phase 2) |
+
+That fourth row is the standing rule for the whole project: when something new
+needs somewhere to live and it is not lake data, it goes in **artifacts**. No new
+bucket gets created for code, packages, scratch output or query results.
+
+**Decided: the top-level prefix is the SOURCE, not the layer.** Once the bucket
+names the layer, repeating it in the prefix is noise — `top10/silver/` inside a
+silver bucket says nothing twice — and `top10` was already a lie (11 assets today,
+50 after Phase 4). Phase 4 introduces two sources, so that is what the prefix
+carries:
+
+| Bucket | Prefix |
+|---|---|
+| `crypto-bronze-layer-913524903233` | `cmc/` — joined by `binance/` in Phase 5 |
+| `crypto-silver-layer-913524903233` | `cmc/` and `binance/`, until the Phase 4 join defines the merged shape |
+| `crypto-gold-layer-913524903233` | `gold_features_base/`, `gold_ohlc/`, `gold_ml_training/` — Gold is source-agnostic by definition, it is already the join |
+| `crypto-artifacts-913524903233` | `jobs/`, `producer/`, `tmp/`, `_spark_ui/`, `athena/queries/` |
+
+This is the layout that makes the Phase 4 story legible in an interview: you can
+point at `bronze/cmc/` and `bronze/binance/` and the two-source architecture is
+visible from the bucket listing alone.
+
+The bronze prefix *below* `cmc/` and `binance/` is still provisional — Phase 6
+replaces the partitioning underneath with whatever Firehose writes. What is fixed
+here is the top level.
+
+**Scope**
+
+1. **Empty the three existing buckets first.** Terraform cannot delete a bucket
+   that still holds objects, and — this is the part that bites — a *versioned*
+   bucket is not empty just because its current objects are gone: every noncurrent
+   version and every delete marker counts. Two equivalent ways:
+   - `force_destroy = true` on the old buckets, applied as its own commit before
+     the rewrite. Note that Terraform reads `force_destroy` from **state**, so it
+     must be applied *before* the resources leave the config — otherwise the
+     destroy fails with `BucketNotEmpty`.
+   - Or delete the versions directly (`list-object-versions` + `delete-objects`),
+     which collapses the whole phase into a single apply.
+
+   Budget real time for this. The curated bucket showed 4,268 current objects but
+   **over 56,000 versions**; bronze holds 261,782 current objects and proportionally
+   more.
+2. Rewrite `s3.tf` as four buckets under the new convention, each with versioning,
+   SSE and public access blocked, and **lifecycle rules that apply to the bucket
+   instead of to a prefix filter**. Note that public access blocking is currently
+   *not in the code at all* — the live buckets are only covered by the AWS
+   account-level default. Declare it explicitly. This removes a latent bug: today's rules match
+   on `top10/silver/` and `top10/gold/`, and any prefix rename would have switched
+   them off silently, with no error.
+3. Repoint every reference. The Python is safe — every Glue job and the Lambda
+   already read bucket and prefix from job arguments and env vars, nothing is
+   hardcoded there. What actually changes:
+   - `terraform.tfvars` and `variables.tf`
+   - the four Glue job argument blocks, `lambda.tf`, `athena.tf`,
+     `glue_crawlers_catalog.tf`
+   - the IAM documents, now scoped by **bucket ARN** — which deletes the
+     `_$folder$` ARN triples in `iam_glue_job_gold.tf`
+   - the five files in `sql/` carrying hardcoded `LOCATION` and
+     `storage.location.template` values
+4. Apply: three buckets destroyed, four created, everything else updated in place.
+5. **The Silver crawler must be REPLACED, not updated.** It runs with
+   `recrawl_behavior = "CRAWL_NEW_FOLDERS_ONLY"`, and AWS makes the S3 target
+   immutable under that setting: `UpdateCrawler` is rejected with
+   *"Amazon S3 target is immutable when Crawl new folders only is selected"*.
+   Use `terraform apply -replace=aws_glue_crawler.silver_crawler`.
+
+   Replacement is the correct action here rather than a workaround: the crawler's
+   internal record of which folders it has already seen refers to a bucket that no
+   longer exists, so a fresh crawler is what is actually wanted. It is safe because
+   `sfn.tf` references it by name (`var.silver_crawler_name`), not by resource
+   attribute, and the name does not change.
+6. Drop the Glue catalog tables pointing at the old locations and re-run the Athena
+   projection DDL against the new buckets. The tables come back empty by design.
+7. The new buckets carry `prevent_destroy = true` from creation — there is no
+   window in which they are unprotected.
+8. While every reference is being rewritten anyway, collapse the indirection: the
+   `aws_s3_bucket` resources become the **single source of truth** for their own
+   names, and every other file references `aws_s3_bucket.<x>.id` / `.arn` instead of
+   a `bucket_*_name` variable. Holding the same name in both `s3.tf` and
+   `terraform.tfvars` is precisely what made the Phase 1 recovery dangerous: a typo
+   in tfvars planned a destroy+recreate of the data lake.
+
+**Findings from the execution** — three things that cost real time and are worth
+knowing before repeating this on another project:
+
+1. **A versioned bucket is not empty when its current objects are gone.** The
+   curated bucket showed 4,268 current objects and turned out to hold 32,388
+   versions; bronze held 262,031. `DeleteBucket` returns `409 BucketNotEmpty`
+   until every version *and* delete marker is gone. Budget the time.
+2. **`force_destroy` is read from state, not from config.** Setting it in the same
+   change that removes the resource does nothing — Terraform plans the destroy from
+   the prior state. It has to be applied as its own earlier step, or the versions
+   deleted out of band.
+3. **Lake Formation governs this catalog.** `DROP TABLE` through Athena and
+   `glue delete-table` both fail with *"Insufficient Lake Formation permission(s)"*
+   even for an account admin, until an explicit `DROP` grant is issued:
+   `aws lakeformation grant-permissions --principal DataLakePrincipalIdentifier=<arn>
+   --resource '{"Table":{...}}' --permissions DROP`. See `Lake_Formation_Checklist.md`.
+
+**Why here and not later.** It cannot live inside Phase 3 — that phase's
+acceptance criterion is a zero-diff plan, and destroying three buckets is not zero
+diffs. Doing it *before* Phase 3 means the `storage/` module gets written once,
+against the final four-bucket shape, instead of being rewritten immediately after
+being frozen. It comes *after* Phase 2 because the state must already be safe in
+its own bucket before this phase starts deleting buckets.
+
+**DoD**
+- [x] Explicit `aws_s3_bucket_public_access_block` on all four buckets — it was missing from the code entirely; only the AWS account default had been protecting them
+- [x] Old buckets emptied of every object **version** and delete marker — 294,507 in total
+- [x] Four buckets created: bronze, silver, gold, artifacts — versioned, SSE, public access blocked
+- [x] Three old buckets destroyed; `aws s3api list-buckets` shows no `lake-*` and no `artifacts-crypto-data-crypto`
+- [x] Every lifecycle rule applies at bucket level. The two that keep a prefix in artifacts scope one content type inside the bucket; they do not stand in for a missing bucket boundary
+- [x] IAM scoped by bucket ARN; the nine `_$folder$` entries are gone, and the Silver role no longer holds blanket delete on artifacts
+- [x] `top10/` gone from every prefix, path and DDL file, replaced by `cmc/` (and `binance/` from Phase 5)
+- [x] The five `sql/` files repointed. Catalog tables moved with `ALTER ... SET LOCATION` rather than DROP+CREATE, which keeps the four `gold_ohlc_*` views intact
+- [x] Silver crawler **replaced** (not updated) — its S3 target is immutable under `CRAWL_NEW_FOLDERS_ONLY`
+- [x] Stale `silver_silver` dropped (wrong name *and* wrong location); `crypto_silver_db` is empty until the crawler creates `silver_cmc`
+- [x] `bucket_lake_raw_name` / `bucket_silver_gold_name` / `bucket_artifacts_name` variables deleted; nothing reconstructs a bucket name from tfvars
+- [x] `terraform plan` reports `No changes`
+- [x] State left alone. NOTE: this phase ran **before** Phase 2, so it executed against the local state file, backed up first to `~/crypto-tfstate-backup-before-phase21-20260824-2247.json`
+
+**Prompt to run**
+
+> Phase 2.1 of roadmap.md: refactor storage into one bucket per layer, deleting the
+> current data on purpose. The existing objects are worthless (incomplete series,
+> provisional 11-asset list, polling-era design) — do not migrate them. First empty
+> the three existing buckets of every object version and delete marker (they are
+> versioned, so current objects are not the whole story), either via `force_destroy`
+> applied before the resources leave the config, or by deleting the versions directly. Then rewrite `s3.tf` as `crypto-bronze-layer-913524903233` / `crypto-silver-layer-913524903233` / `crypto-gold-layer-913524903233` / `crypto-artifacts-913524903233`
+> with bucket-level lifecycle rules (no prefix filters), repoint tfvars, the Glue job
+> arguments, `lambda.tf`, `athena.tf`, the crawler, the IAM documents (scoped by bucket
+> ARN — drop the `_$folder$` entries) and the five `sql/` DDL files. Replace the
+> `top10/` prefix everywhere with the SOURCE as the top-level prefix — `cmc/` now,
+> `binance/` from Phase 5. Apply, drop the stale Glue catalog tables, re-run the
+> Athena projection DDL, then restore `prevent_destroy = true` and remove
+> `force_destroy`. Verify `terraform plan` is clean and that no old bucket survives.
+
+---
+
 ## Phase 3 — Terraform refactor into modules
 
 **Goal:** turn 20 flat `.tf` files into a readable module structure.
@@ -195,7 +400,7 @@ that had never been validated, with no safety net.
 ```
 terraform/
 ├── modules/
-│   ├── storage/        # 3 buckets + versioning + sse + lifecycle
+│   ├── storage/        # 4 buckets (bronze/silver/gold/artifacts) + versioning + sse + lifecycle
 │   ├── ingestion/      # lambda + eventbridge  (later: kinesis + firehose)
 │   ├── catalog/        # glue databases + crawler + athena workgroup
 │   ├── processing/     # the 4 glue jobs
@@ -215,7 +420,9 @@ they grant access to, which is exactly what makes the codebase hard to read.
   (three event `target_id`s + the Glue inline policy name).
 - Tighten IAM: `iam_sfn.tf` grants Glue actions on `Resource = ["*"]`, which
   contradicts the project's own least-privilege rule.
-- Remove the unused `top10_list_symbol` variable.
+- Remove the unused variables: `top10_list_symbol` and `gold_spark_ui_prefix`,
+  both declared and never referenced. Rename `top10_list_id` to match the naming
+  cleanup Phase 2.1 already applied to the S3 prefixes.
 - Introduce `default_tags` on the provider (kept out of Phase 1 on purpose — it
   would have retagged every deployed resource and flooded the import plan).
 - Run `terraform fmt -recursive` (kept out of Phase 1 to keep that diff readable).
@@ -239,7 +446,7 @@ they grant access to, which is exactly what makes the codebase hard to read.
 > plan stays at zero diffs — that is the acceptance criterion, verify it.
 > Then, as separate reviewed commits: rename the pinned auto-generated
 > identifiers, scope the `Resource = "*"` IAM statements, drop the unused
-> `top10_list_symbol`, add `default_tags`, add `outputs.tf`, and run
+> `top10_list_symbol` and `gold_spark_ui_prefix`, add `default_tags`, add `outputs.tf`, and run
 > `terraform fmt -recursive`.
 
 ---
@@ -330,6 +537,10 @@ signals on it, the model is broken), and something high-volatility.
   bucket, with `buffering_size` / `buffering_interval` matched to actual volume.
 - Dedicated IAM role for Firehose (read the source stream, write the destination
   bucket).
+- **The producer code ships to the artifacts bucket**, under
+  `s3://crypto-artifacts-913524903233/producer/`, exactly like the Glue job scripts
+  already do under `jobs/`. No new bucket is created for it — see the storage rule
+  in Phase 2.1.
 - Retune the existing CMC Lambda: 5 min → 1 hour, 11 assets → top 50.
 
 **⚠️ OPEN DECISION — where the producer runs. Deliberately unresolved.**
@@ -359,6 +570,7 @@ its reasoning.
 - [ ] Producer running, connected, writing records with symbol as partition key
 - [ ] Producer IAM role scoped to the stream ARN
 - [ ] Firehose delivering into the bronze bucket, buffering tuned and justified
+- [ ] Producer package uploaded to `crypto-artifacts-913524903233/producer/`, not to a new bucket
 - [ ] CMC Lambda retuned to hourly / top-50
 - [ ] Producer hosting decision made **explicitly**, with its monthly cost and
       reasoning written into this file before any producer code is written
@@ -384,6 +596,10 @@ its reasoning.
 ## Phase 6 — Bronze layout, Silver adaptation, catalog cleanup
 
 **Goal:** absorb the layout change Firehose forces, and retire the crawler.
+
+**Already settled in Phase 2.1:** which bucket each layer lives in, and the fact
+that `top10/` is gone. What remains here is only the *internal* layout of the
+bronze bucket — the shape Firehose writes underneath the `binance/` prefix.
 
 **The problem.** Firehose writes `YYYY/MM/DD/HH/` prefixes, not Hive-style. The
 current bronze layout is `id={coin_id}/year=/month=/day=/hour=/`, produced by the
@@ -702,7 +918,13 @@ phase. Each is tagged with where it gets resolved.
 | `terraform fmt` across the whole codebase | Phase 3 | Kept out of Phase 1 to keep that diff readable |
 | `default_tags` on the provider | Phase 3 | Kept out of Phase 1 — would have retagged everything |
 | No `outputs.tf` anywhere | Phase 3 | |
-| **Rename the `top10/` prefix to `assets/`** (or similar) | when convenient | The name already lies (11 assets today, 50 later). Not cosmetic: it means migrating objects in S3, rewriting the Athena projection DDL, and updating every Glue job argument and IAM ARN pattern. Cheapest moment is while the lake is small and dormant. Also touches `top10_list_id` / `top10_list_symbol` variable names |
+| **Drop the `top10/` prefix** | Phase 2.1 | The name already lies (11 assets today, 50 later). Free there: the data is deleted, so there is nothing to migrate — only DDL, Glue arguments and IAM ARNs to rewrite. The `top10_list_id` / `top10_list_symbol` variable names follow in Phase 3 |
+| **Silver and Gold share one bucket** | Phase 2.1 | Forces lifecycle rules and IAM to be built on prefix filters instead of bucket ARNs |
+| **Artifacts bucket is named `artifacts-crypto-data-crypto`** | Phase 2.1 | Names are immutable, so the fix is a new bucket under the `<env>-<purpose>-<account>` convention |
+| Prefix-filtered lifecycle rules break silently on a rename | Phase 2.1 | `top10/silver/` and `top10/gold/` filters would stop matching with no error |
+| Glue crawler S3 target is immutable under `CRAWL_NEW_FOLDERS_ONLY` | Phase 2.1 | Any future target change needs `-replace`, not an update. Moot once Phase 6 deletes the crawler |
+| **Delete the current lake data — deliberate clean slate** | Phase 2.1 | Incomplete series, provisional 11-asset list, polling-era design. Angel's call: start from zero rather than migrate |
+| Unused `gold_spark_ui_prefix` variable | Phase 3 | Declared, never referenced — same story as `top10_list_symbol` |
 | Curate the final 50-asset list | Phase 4 | Static and hand-picked, never a live ranking. The current 11 ids are provisional |
 | **Producer hosting: Fargate 24/7 vs time-boxed vs Lambda polling** | Phase 5 | ⚠️ Open decision, Angel's call. First recurring cost in the project — not to be defaulted into |
 | Firehose partitioning: dynamic vs native prefix | Phase 6 | Deep analysis required; affects Silver and cost |
@@ -719,14 +941,24 @@ phase. Each is tagged with where it gets resolved.
 
 ## Implementation order
 
-Phases 0–1 are done. The remainder runs in numeric order, with one exception worth
-naming: **Phase 4 (data source decision) must be settled before Phase 5**, because
+Phases 0–1 are done. The remainder runs in numeric order. Two sequencing points
+worth naming.
+
+**Phase 2.1 sits between the backend and the module refactor for a reason.** It has
+to come after Phase 2, because the state must already be safe in its own bucket
+before a phase starts destroying buckets. It has to come before Phase 3, because
+Phase 3's acceptance criterion is a zero-diff plan and destroying three buckets is
+not zero diffs — and because writing the `storage/` module once, against the final
+four-bucket shape, beats rewriting it the week after it is frozen.
+
+And: **Phase 4 (data source decision) must be settled before Phase 5**, because
 choosing Binance WebSocket forces a persistent producer, which pulls part of Phase
 12's Docker/Fargate work forward. That is a feature, not a problem — it front-loads
 the learning that matters most.
 
-**The project stays dormant through Phases 2, 3 and 4.** Those phases touch code,
-structure and decisions — not running infrastructure. Phase 5 is the first one that
+**The project stays dormant through Phases 2, 2.1, 3 and 4.** Those phases touch
+code, structure and decisions — and in Phase 2.1, deliberately delete the existing
+data — but never bring running infrastructure back up. Phase 5 is the first one that
 puts data back in motion, and the wake-up is a deliberate act with two
 preconditions (see *Current state: DORMANT* at the top of this file), not a side
 effect of an apply.

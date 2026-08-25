@@ -21,7 +21,7 @@ PARTITIONED BY (
   asset_id int
 )
 STORED AS PARQUET
-LOCATION 's3://lake-curated-data-silver-gold-crypto/top10/gold/gold_ohlc/'
+LOCATION 's3://crypto-gold-layer-913524903233/gold_ohlc/'
 TBLPROPERTIES (
   'projection.enabled' = 'true',
   'projection.g.type'    = 'enum',
@@ -35,7 +35,7 @@ TBLPROPERTIES (
   'projection.asset_id.range' = '1,999999',
   'projection.asset_id.digits' = '1',
   'storage.location.template' =
-    's3://lake-curated-data-silver-gold-crypto/top10/gold/gold_ohlc/g=${g}/dt=${dt}/asset_id=${asset_id}/'
+    's3://crypto-gold-layer-913524903233/gold_ohlc/g=${g}/dt=${dt}/asset_id=${asset_id}/'
 );
 
 
@@ -56,12 +56,12 @@ SELECT * FROM crypto_gold_db.gold_ohlc WHERE g='month';
 
 -- 1) Corrige el LOCATION raíz
 ALTER TABLE crypto_gold_db.gold_ohlc
-SET LOCATION 's3://lake-curated-data-silver-gold-crypto/top10/gold/gold_ohlc/';
+SET LOCATION 's3://crypto-gold-layer-913524903233/gold_ohlc/';
 
 -- 2) Corrige el template de proyección
 ALTER TABLE crypto_gold_db.gold_ohlc
 SET TBLPROPERTIES (
-  'storage.location.template' = 's3://lake-curated-data-silver-gold-crypto/top10/gold/gold_ohlc/g=${g}/dt=${dt}/asset_id=${asset_id}/'
+  'storage.location.template' = 's3://crypto-gold-layer-913524903233/gold_ohlc/g=${g}/dt=${dt}/asset_id=${asset_id}/'
 );
 
 -- 3) mejorar la particion solo por los ids existentes
