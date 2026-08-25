@@ -28,7 +28,25 @@
 # imported here, resolving the chicken-and-egg. That directory was deleted once
 # the import landed -- two configs declaring the same bucket is a footgun. To
 # rebuild from nothing, recreate it from the Phase 2 notes in roadmap.md.
+#
+# WHY THIS IS NOT IN modules/storage/  (roadmap.md, Phase 3)
+# That module is the LAKE. This bucket is infrastructure *of* the
+# infrastructure, and it belongs next to backend.tf, which is the only other
+# file that names it. Keeping it out of the module also means a second
+# environment cannot instantiate module.storage and silently acquire a second
+# state bucket along with its four lake buckets.
 # =============================================================================
+
+# Same shape as the tags in modules/storage/, deliberately duplicated rather
+# than shared: this bucket is not a lake layer, and a module output is not worth
+# creating just to carry three static strings across a boundary.
+locals {
+  bucket_tags = {
+    Environment = var.environment
+    Owner       = "Angel Hackerman"
+    Project     = "Crypto Near Real Time Data Ingestion"
+  }
+}
 
 resource "aws_s3_bucket" "tf_state" {
   bucket = "crypto-tf-state-${var.aws_account_id}"
