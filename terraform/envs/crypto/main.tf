@@ -19,6 +19,33 @@
 
 locals {
   repo_root = "${path.module}/../../.."
+
+  # -----------------------------------------------------------------------
+  # The tracked universe is read from config/tracked_assets.json, not held in
+  # tfvars (roadmap.md, Phase 5; data_sources.md section 12).
+  #
+  # This applies to the asset list the same rule Phase 2.1 applied to bucket
+  # names and Phase 3 to job names: ONE OWNER PER FACT. The Lambda, the
+  # producer and -- from Phase 7 -- the backfill and the Gold join all read
+  # this same file, so they cannot drift apart in what they track. A list in
+  # tfvars would be a second copy, and tfvars is gitignored, so that copy would
+  # be invisible to review and different on every machine.
+  #
+  # The file is the FROZEN, hand-picked 50. Deliberately not a live top-50
+  # ranking: a dynamic universe silently changes what is tracked and makes the
+  # training set non-reproducible.
+  # -----------------------------------------------------------------------
+  tracked_assets = jsondecode(file("${local.repo_root}/config/tracked_assets.json")).assets
+
+  # All 50 go to CoinMarketCap: 50 ids in one batched call still costs 1 credit.
+  tracked_asset_ids = [for a in local.tracked_assets : a.cmc_id]
+
+  # Only the 45 with a live Binance pair go to the producer. The other five are
+  # not an oversight -- USDT cannot have a USDT pair, XMR and DAI are delisted
+  # tombstones that accept a subscription and then deliver nothing, and HYPE and
+  # KAS were never listed. has_stream is a flag the code READS, never an
+  # assumption it makes. See data_sources.md section 6.
+  streamed_symbols = [for a in local.tracked_assets : a.binance_symbol if a.has_stream]
 }
 
 # -----------------------------------------------------------------------------
@@ -33,23 +60,52 @@ module "storage" {
 }
 
 # -----------------------------------------------------------------------------
-# Ingestion -- CMC extractor Lambda + its schedule.
-# Phase 5 adds Kinesis, Firehose and the Binance producer here.
+# Network -- the minimum VPC the Fargate producer needs (Phase 5).
+#
+# The first VPC in the project: everything before it (Lambda, Glue, Step
+# Functions, Athena) runs outside one. No NAT Gateway, on purpose -- the
+# producer only dials out, and a NAT would cost ~$33/month to buy nothing.
+# Every resource in this module is free.
+# -----------------------------------------------------------------------------
+module "network" {
+  source = "../../modules/network"
+
+  environment = var.environment
+}
+
+# -----------------------------------------------------------------------------
+# Ingestion -- both paths into bronze:
+#   - the CoinMarketCap extractor Lambda and its schedule (Phase 3)
+#   - the Binance stream: Kinesis, Firehose and the Fargate producer (Phase 5)
+#
+# The streaming half is gated on streaming_enabled, which defaults to false. A
+# Kinesis shard bills from creation rather than from use, so dormancy here has
+# to mean "does not exist", not "sits idle". See "Current state: DORMANT".
 # -----------------------------------------------------------------------------
 module "ingestion" {
   source = "../../modules/ingestion"
 
   environment         = var.environment
+  aws_account_id      = var.aws_account_id
+  aws_region          = var.aws_region
   bronze_bucket_id    = module.storage.bronze_bucket_id
   bronze_bucket_arn   = module.storage.bronze_bucket_arn
   bronze_prefix       = var.bronze_prefix
   secrets_manager_arn = var.secrets_manager_arn
-  tracked_asset_ids   = var.tracked_asset_ids
+  tracked_asset_ids   = local.tracked_asset_ids
   schedule_expression = var.eventbridge_schedule_expression
   rule_enabled        = var.eventbridge_rule_enabled
 
   lambda_source_file = "${local.repo_root}/extractor_bronze_lambda/app.py"
   lambda_build_path  = "${local.repo_root}/extractor_bronze_lambda/build/fetch_top10.zip"
+
+  # --- streaming path -------------------------------------------------------
+  streaming_enabled       = var.streaming_enabled
+  streamed_symbols        = local.streamed_symbols
+  bronze_streaming_prefix = var.bronze_streaming_prefix
+
+  public_subnet_ids          = module.network.public_subnet_ids
+  producer_security_group_id = module.network.producer_security_group_id
 }
 
 # -----------------------------------------------------------------------------
@@ -126,4 +182,7 @@ module "observability" {
   environment       = var.environment
   sns_email         = var.sns_email
   state_machine_arn = module.orchestration.state_machine_arn
+
+  # Phase 5: a cost guard, in place BEFORE the streaming gate is ever opened.
+  monthly_budget_usd = var.monthly_budget_usd
 }

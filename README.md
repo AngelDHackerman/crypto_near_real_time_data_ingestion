@@ -23,9 +23,14 @@ It ingests, processes, and prepares cryptocurrency market data into **analytics-
 
 All infrastructure is defined as **Infrastructure-as-Code (Terraform)** and integrated with **AWS Glue, Athena, and Lake Formation** for complete data governance.
 
-> ⏸️ **The pipeline is currently dormant on purpose** while it is being
-> restructured. See [`roadmap.md`](./roadmap.md) for the phase plan and the two
-> conditions that wake it back up.
+> ⏸️ **The pipeline is dormant on purpose, and stays that way until the project
+> is finished.** Not an outage and no longer a waiting room: a Kinesis shard
+> bills from the moment it is created rather than from use, so waking up early
+> would mean carrying a recurring bill through years of phases that do not need
+> it. Dormancy is therefore a design constraint — every billable resource sits
+> behind a Terraform gate that defaults to off, and a gate means `count = 0`, not
+> merely "disabled". The stack is fully built and costs **$0/month**. See
+> [`roadmap.md`](./roadmap.md).
 
 ---
 
@@ -124,10 +129,17 @@ the join design: **[`data_sources.md`](./data_sources.md)**.
 
 Tracked phase by phase in [`roadmap.md`](./roadmap.md). Immediately next:
 
-- **Phase 5 — Streaming ingestion:** Kinesis + Firehose + the Binance WebSocket
-  producer. This is the phase where the project wakes up.
-- **Phase 6 onward:** feature engineering, model training, registry, serving, and
-  the model feedback loop that is the actual goal of the project.
+- **Phase 5 — Streaming ingestion: ✅ built, deliberately switched off.** Kinesis,
+  Firehose, a NAT-free VPC and the Binance producer on Fargate, all defined in
+  Terraform behind `streaming_enabled = false`. The producer is verified against
+  the live Binance WebSocket locally — 45 symbols over one connection, 52
+  events/s batched into 5 records/s — which needs no AWS resource to exist,
+  because that WebSocket is public and free.
+- **Phase 6 onward:** bronze layout, feature engineering, model training,
+  registry, serving, and the model feedback loop that is the actual goal of the
+  project.
+- **The wake-up** is the last step, not an early one: flip two variables, and the
+  first thing verified is a Binance tick landing as an object in S3.
 
 ---
 

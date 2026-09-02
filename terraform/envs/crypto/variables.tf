@@ -26,6 +26,17 @@
 #       Deleted in Phase 2.1. Its orphaned comment ("Prefijos para Spark UI y
 #       TempDir dentro del bucket GOLD"), left stranded above an unrelated
 #       variable, is deleted here.
+#
+#   tracked_asset_ids
+#       Deleted in Phase 5. The frozen 50 live in config/tracked_assets.json,
+#       which main.tf reads directly -- the same one-owner-per-fact rule, now
+#       applied to the asset list. Keeping it here as well would put the list in
+#       two places, and tfvars is gitignored, so the second copy would be
+#       invisible to review and different on every machine.
+#
+#       IF YOUR LOCAL tfvars STILL SETS IT, delete that line. Terraform only
+#       warns about a value for an undeclared variable, so it will not fail --
+#       it will just quietly do nothing, which is worse.
 # =============================================================================
 
 variable "aws_account_id" {
@@ -98,17 +109,25 @@ variable "athena_results_prefix" {
   type        = string
 }
 
-# --- Tracked assets ---------------------------------------------------------
-variable "tracked_asset_ids" {
-  description = "CoinMarketCap ids to fetch. Renamed from top10_list_id in Phase 3: the name already lied at 11 ids, and Phase 4 replaces the list with a curated, FIXED set of 50 -- hand-picked, never a live ranking."
-  type        = list(number)
-}
-
 # --- Schedules --------------------------------------------------------------
 variable "eventbridge_schedule_expression" {
-  description = "Cron/rate expression driving the CMC extractor Lambda."
+  description = <<-EOT
+    Cron/rate expression driving the CMC extractor Lambda.
+
+    Hourly since Phase 5, down from every 5 minutes. That cadence was never a
+    design choice: 5 minutes is 8,640 calls/month against CoinMarketCap's
+    10,000-credit free tier -- 86% of quota, i.e. the ceiling. Hourly with the
+    frozen 50 costs 730 credits/month, 7.3%, because quotes/latest bills 1
+    credit per call per 100 ids, so 50 ids in one batched call is still 1
+    credit. Tick-granularity data now comes from the Binance stream; what CMC
+    uniquely provides -- market cap, supply, dominance -- does not move fast
+    enough to justify polling it twelve times an hour.
+
+    NOTE: this default is overridden by terraform.tfvars, which is gitignored.
+    Changing it here does not change a deployment that sets it there.
+  EOT
   type        = string
-  default     = "rate(5 minutes)"
+  default     = "rate(1 hour)"
 }
 
 variable "eventbridge_rule_enabled" {
@@ -121,6 +140,42 @@ variable "sfn_daily_schedule_cron" {
   description = "EventBridge cron (UTC) driving the daily Silver -> Gold state machine."
   type        = string
   default     = "cron(0 0 * * ? *)"
+}
+
+# --- Streaming (Phase 5) ----------------------------------------------------
+variable "streaming_enabled" {
+  description = <<-EOT
+    THE COST GATE for the Binance streaming path. False, and it stays false.
+
+    Not the same kind of switch as eventbridge_rule_enabled. A DISABLED
+    EventBridge rule is free, so it can exist while switched off; a Kinesis
+    shard bills ~$10.95/month from the moment it is created, at zero traffic.
+    So this drives `count` -- the stream and its Firehose must NOT EXIST -- and
+    drives the producer service to desired_count = 0.
+
+    With it false, `terraform apply` still builds the whole streaming stack:
+    VPC, security group, ECR repository, task definition, both IAM roles, log
+    groups, the ECS cluster and service. All of it free. Opening the gate is one
+    variable, not a rebuild.
+
+    Flipping this to true starts a ~$25/month bill (~$12.62 ingestion +
+    ~$12.66 producer). Do it deliberately, at the end of the project, as code.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "bronze_streaming_prefix" {
+  description = "Top-level prefix in bronze for the Binance stream, alongside \"cmc\". The SOURCE, not the layer."
+  type        = string
+  default     = "binance"
+}
+
+# --- Cost guard (Phase 5) ---------------------------------------------------
+variable "monthly_budget_usd" {
+  description = "AWS Budgets threshold for the whole account. Set BEFORE the streaming gate is ever opened, so it is already watching rather than being added after a surprise. Deliberately just above the ~$25/month the project costs awake: it should fire on a mistake, not on normal operation."
+  type        = number
+  default     = 40
 }
 
 # --- Notifications ----------------------------------------------------------

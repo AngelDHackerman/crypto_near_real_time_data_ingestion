@@ -36,6 +36,32 @@ output "ingestion_enabled" {
   value       = var.eventbridge_rule_enabled
 }
 
+# --- Streaming (Phase 5) ----------------------------------------------------
+output "streaming_enabled" {
+  description = "Whether the BILLABLE streaming resources exist. False means the Kinesis stream and its Firehose are not merely idle -- they do not exist, because a shard bills from creation. The producer service is at desired_count = 0."
+  value       = var.streaming_enabled
+}
+
+output "producer_ecr_repository_url" {
+  description = "Push target for the producer image. See producer/Dockerfile for the build and push commands."
+  value       = module.ingestion.producer_ecr_repository_url
+}
+
+output "producer_service_name" {
+  description = "ECS service running the Binance producer. At desired_count = 0 while dormant."
+  value       = module.ingestion.producer_service_name
+}
+
+output "kinesis_stream_name" {
+  description = "Name the Binance tick stream WILL have. Composed, not read: while streaming_enabled is false the stream does not exist, and this output still answers \"what would it be called\"."
+  value       = module.ingestion.kinesis_stream_name
+}
+
+output "monthly_budget_usd" {
+  description = "Account-wide budget threshold now watching, so it is in place before the streaming gate is ever opened."
+  value       = var.monthly_budget_usd
+}
+
 # --- Catalog ----------------------------------------------------------------
 output "glue_databases" {
   description = "Glue catalog databases backing the Silver and Gold tables."

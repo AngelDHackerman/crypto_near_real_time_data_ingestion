@@ -72,3 +72,60 @@ resource "aws_cloudwatch_event_target" "sfn_failed_to_sns" {
   # modules/ingestion/main.tf -- pinned for the Phase 1 import, readable now.
   target_id = "sfn-failure-to-sns"
 }
+
+# =============================================================================
+# Cost guard -- AWS Budgets  (roadmap.md, Phase 5)
+#
+# Phase 5 is where this project stops being free. It is put in place NOW, while
+# the streaming gate is still closed and the account bills ~$0, precisely so it
+# is already watching on the day the gate opens -- a budget added after a
+# surprise bill is a post-mortem, not a control.
+#
+# WHY BUDGETS AND NOT A CLOUDWATCH ALARM ON EstimatedCharges. Two reasons, and
+# the second one matters more than it looks:
+#
+#   1. The AWS/Billing metric only publishes if "Receive Billing Alerts" has been
+#      ticked by hand in account preferences -- a console click Terraform cannot
+#      make and cannot see. An alarm on a metric that is never published sits in
+#      INSUFFICIENT_DATA forever and looks exactly like an alarm that is fine.
+#      This project's first ground rule is that clicking in the console is never
+#      the answer; a control that silently depends on a click is worse than none.
+#
+#   2. It notifies by email DIRECTLY, not through the SNS topic above. That
+#      dodges the known defect documented at the top of this file: the topic
+#      policy allows only events.amazonaws.com to publish, so a notification
+#      arriving as budgets.amazonaws.com would be dropped SILENTLY. Phase 11
+#      fixes the topic; until it does, the cost guard does not depend on it.
+#
+# Scope is the whole account, not this project -- account 913524903233 is shared
+# with other projects, so an account-wide budget is the one that catches "some
+# other stack of mine started billing" as well.
+#
+# Two thresholds: 80% forecast (an early warning that the month is trending
+# over) and 100% actual (it happened). The first is the one that is meant to be
+# actionable.
+# =============================================================================
+
+resource "aws_budgets_budget" "account_monthly" {
+  name         = "crypto-account-monthly-${var.environment}"
+  budget_type  = "COST"
+  limit_amount = tostring(var.monthly_budget_usd)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 80
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "FORECASTED"
+    subscriber_email_addresses = [var.sns_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.sns_email]
+  }
+}
