@@ -91,7 +91,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
 | 3 | Terraform refactor into modules | ✅ Done | `phase-3/terraform-modules` | 69 `moved {}` blocks, **0 destroyed** on the structural apply. 6 modules + `envs/crypto/`. Plan clean |
 | 4 | Data source strategy (Binance WS + CMC) | ✅ Done | `phase-4/data-source-strategy` | 50 ids frozen in `config/tracked_assets.json`, 45 streamed + 5 CMC-only. CMC quota 86% → 7.3%. No infra touched |
-| 5 | Streaming ingestion (Kinesis + Firehose + producer) | 🟡 In progress | `phase-5/streaming-ingestion` | Unblocked by 4. **Does NOT wake the project** — built behind `streaming_enabled = false`, $0/mo. Hosting: Fargate 24/7 (~$12.66/mo when opened); capacity: 1 provisioned shard (~$12.62/mo all-in) |
+| 5 | Streaming ingestion (Kinesis + Firehose + producer) | ✅ Done | `phase-5/streaming-ingestion` [#5] | **Does NOT wake the project.** 19 added, 2 changed, **0 destroyed**, **$0/month** — no Kinesis or Firehose exists behind `streaming_enabled = false`. Producer verified against live Binance locally. Tick-to-S3 check deferred to the wake-up |
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler. Buckets/prefixes already settled in 2.1 |
 | 7 | Feature engineering | ⬜ Not started | | Extends existing Gold jobs |
 | 8 | Model training | ⬜ Not started | | Serverless, no VPC |
@@ -909,7 +909,7 @@ project is woken up.
 - [x] CMC Lambda retuned to hourly / the frozen 50, reading `config/tracked_assets.json`
 - [x] Cost guard in place, so it is already watching on the day the gate opens — AWS Budgets, not a CloudWatch billing alarm; see the reasoning in `modules/observability/main.tf`
 - [x] Producer proved against the live Binance WebSocket **locally** — 45 symbols, 90 streams, one connection, zero drops — with no AWS resource created
-- [ ] `terraform plan` clean, and `apply` proving the ungated scaffold costs $0/month
+- [x] `terraform plan` clean, and `apply` proving the ungated scaffold costs $0/month — **19 added, 2 changed, 0 destroyed**
 - [ ] ~~End-to-end verified: a Binance tick lands as an object in S3~~ — **deferred**, see Decision 3; first task on wake-up
 - [ ] ~~EventBridge rules re-enabled~~ — **deferred**. `eventbridge_rule_enabled` and
       `streaming_enabled` both stay `false`; the project does not wake up in this phase
@@ -974,6 +974,47 @@ reader to notice.
 copy was invisible to code review and free to differ on every machine, while the
 Lambda, the producer and the Gold join all believed they tracked the same
 universe. One owner per fact, the same rule Phase 2.1 applied to bucket names.
+
+**8. Commenting the Kinesis code out was considered as the dormancy mechanism,
+and rejected.** The proposal was to leave the stream and Firehose in the file as
+comments and uncomment them on deployment day. The goal is right — the resource
+must not exist — but as a mechanism it is strictly worse than `count`, on five
+counts:
+
+| | `count` gate | Commented out |
+|---|---|---|
+| Validated by `validate` / `fmt` / `plan`? | Yes, every run | **No.** It rots silently; a provider upgrade breaks it and you find out on the day you uncomment it |
+| Can you prove it turns on correctly? | Yes — see below | **Impossible.** There is no way to plan what is not code |
+| Is switching it on reviewable? | One boolean, in git | A diff that uncomments ~100 lines, which nobody reads properly |
+| Turning it back off | `false`, and Terraform destroys both resources | Comment out **four resources across two files**, coordinated by hand; miss one and the shard keeps billing |
+| Exercised in CI (Phase 12)? | Yes, the plan covers it | Invisible |
+
+The last row of that table is the one that decides it: the Firehose, its IAM role
+and its policy all reference the stream, so commenting the stream out forces a
+coordinated multi-file edit every single time the switch is thrown. `count` does
+that coordination itself.
+
+**The proof, which commented code cannot produce.** `terraform plan
+-var="streaming_enabled=true"` goes from **19 to 24 resources** — the stream, the
+Firehose, its role, its policy and its log group — without creating anything. The
+gated code is type-checked, its references resolved and its plan concrete, while
+still costing nothing.
+
+**9. Applied, and verified in AWS rather than in the plan.** `terraform apply`:
+**19 added, 2 changed, 0 destroyed.** Read back from state afterwards:
+
+| Invariant | Value |
+|---|---|
+| Kinesis / Firehose resources in state | **NONE** |
+| ECS `desired_count` | **0** |
+| Producer security group ingress rules | **0** |
+| NAT Gateways | **none created** |
+| EventBridge extractor rule | **DISABLED**, `rate(1 hour)` |
+| Lambda `TOP_LIST_ID` | **50 ids** |
+| Account budget | **$40/month**, watching |
+
+The lake is now fully built and fully asleep. Monthly cost of everything this
+phase added: **$0**.
 
 **Prompt to run**
 
