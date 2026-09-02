@@ -75,6 +75,14 @@ roles, ECR repositories, task definitions, log groups, Glue jobs, the state mach
 Waking up is flipping those flags, deliberately and as code, never by clicking in
 the console. Until that moment the correct state of this project is **asleep**.
 
+**One precondition stands between the flags and a working wake-up.** Phase 5 built
+the ECR repository and a task definition that pulls `:latest`, but **the producer
+image has never been built and the repository is empty** — so flipping
+`streaming_enabled` today starts a task that dies on `CannotPullContainerError`.
+Closing it is Phase 12's job, where the CI/CD pipeline builds that image anyway.
+Recorded in both places because an implicit precondition is one you discover on
+the day it blocks you.
+
 Phase 3 deliberately did not wake anything, and this was checked rather than
 assumed: all three rules were re-read from AWS after the apply and are still
 `DISABLED`.
@@ -1303,10 +1311,30 @@ Terraform/AWS. Understand it deeply — do not delegate this phase to AI.
   (wired to Phase 13), deploy to Fargate or update the endpoint.
 
 Note: if Phase 5 lands the producer on Fargate, part of this learning happens
-earlier — which is a good reason to lean that way.
+earlier — which is a good reason to lean that way. It did.
+
+**⚠️ INHERITED FROM PHASE 5 — an unbuilt image, and it blocks the wake-up.**
+
+Phase 5 created the ECR repository `crypto-binance-producer-crypto` and a task
+definition that pulls `:latest` from it. **That image has never been built and the
+repository is empty.** So the wake-up is not actually one variable today: setting
+`streaming_enabled = true` would start an ECS task that fails with
+`CannotPullContainerError`.
+
+This was a deliberate deferral, not an oversight — building and publishing images
+is what this phase is *for*, and its GitHub Actions pipeline has to build that
+image anyway. But it is recorded here rather than left implicit, because the cost
+of an implicit precondition is discovering it on wake-up day.
+
+Worth naming honestly: `producer/Dockerfile` has **never been executed**. That is
+the same category of risk as the commented-out Terraform rejected in Phase 5 —
+code nothing validates, which rots quietly and fails on the day someone is in a
+hurry. The first build is therefore a verification, not a formality.
 
 **DoD**
 - [ ] Multi-stage Dockerfile; image size measured and deliberately reduced
+- [ ] **The Phase 5 producer image built and pushed to ECR**, closing the wake-up
+      precondition above — and `producer/Dockerfile` proved to build and run at all
 - [ ] Container runs on Fargate, defined in Terraform
 - [ ] GitHub Actions pipeline: build → push to ECR → validate → deploy
 - [ ] Written comparison of SageMaker vs Fargate vs Kubernetes for **this** project
@@ -1401,6 +1429,7 @@ phase. Each is tagged with where it gets resolved.
 | Use `@aggTrade`, not `@trade`; keep `@bookTicker` out of the baseline | Phase 5 | `@aggTrade` is 3.86× fewer frames with no loss at a 1-minute grain. `@bookTicker` was recommended before being measured and is 7.7× BTC's `@aggTrade` rate — measuring it reversed the call. Naive build $217/mo, tuned $12.62/mo |
 | Batch producer writes to ~5 KB records | Phase 5 | Kinesis on-demand rounds every record up to 1 KB and the frames are 146–360 bytes, so one-record-per-event bills ~4× the bytes actually sent |
 | **Producer hosting: Fargate 24/7 vs time-boxed vs Lambda polling** | Phase 5 | ⚠️ Open decision, Angel's call. First recurring cost in the project — not to be defaulted into |
+| **The producer image has never been built; ECR is empty** | Phase 12 | Phase 5's task definition pulls `:latest` from `crypto-binance-producer-crypto` and nothing has ever been pushed there, so `streaming_enabled = true` would fail with `CannotPullContainerError`. Deferred deliberately — Phase 12's GitHub Actions pipeline builds that image anyway — but it is a **wake-up precondition**, not a nice-to-have. `producer/Dockerfile` has also never been executed, which is the same unvalidated-code risk Phase 5 rejected elsewhere |
 | **Two deployed names now lie, and Phase 5 made it worse** | Phase 6 — **approved 2026-09-01** | The EventBridge rule is `schedule-fetch-top10-5-min-bronze-crypto` and the Lambda is `fetch-top10-crypto-crypto`. Neither was ever accurate — the list was 11, not 10 — and Phase 5 made both wrong twice over: 50 assets, hourly. `name` is ForceNew on both, so fixing them is a destroy+create. Deliberately NOT done in Phase 5, to keep its plan at **0 destroyed**; Phase 6 already touches this surface and both resources are DISABLED, so it is the cheap moment. The same reasoning Phase 3 used to rename the EventBridge `target_id`. Angel approved the rename for Phase 6, so that phase's plan will NOT be 0-destroyed and that is expected, not drift |
 | **Backfill the Binance kline archive from 2017** | Phase 7 | Free at `data.binance.vision`, no key: 3,135 asset-months, ~133M 1-minute candles, ~4.4 GB, $0, and it bypasses Kinesis. Reaches 2017-07 (Binance's own start), not 13 years. Use klines, never aggTrades — one month of BTCUSDT aggTrades is 362 MB against 2.1 MB for klines |
 | Resample the stream to 1-minute bars in Gold to meet the backfill | Phase 7 | The archive and the live `@kline_1m` event are the same twelve fields from the same exchange, so the stitch is exact. Carry `source ∈ {backfill, stream}` and validate on the overlap |
