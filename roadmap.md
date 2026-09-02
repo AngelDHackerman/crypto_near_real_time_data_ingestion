@@ -48,16 +48,32 @@ Stronger still: **Phase 2.1 already deleted the lake** — 294,507 objects and
 versions removed on purpose. The four buckets exist and are empty, so there is
 now literally nothing to lose by staying asleep.
 
-**Wake-up conditions — both must be met:**
+**Wake-up condition — revised 2026-09-01, and now a single one: the project is
+built.** It was two technical preconditions (refactor done, streaming deployed);
+both are met or in hand, and the condition was replaced by an explicit decision to
+**stay asleep through every remaining phase and wake up once, at the end**.
 
-1. ~~The Terraform refactor is complete (Phase 3 done, modules in place, plan clean).~~
-   **Met.** Six modules, an `envs/crypto/` composition layer, plan clean.
-2. Kinesis ingestion is deployed (Phase 5 done, streaming path verified end to end).
-   **Still open — the only remaining precondition.**
+The reason is cost, and it is not hypothetical. A Kinesis provisioned shard bills
+**$10.95/month from the moment it exists**, at zero traffic — waking up in Phase 5
+would mean paying a recurring bill for years of phases before anything serves a
+prediction. So dormancy stopped being "wait until the code is stable" and became a
+standing constraint on the design.
 
-Only then are the EventBridge rules re-enabled, deliberately and as code — by
-flipping `eventbridge_rule_enabled` to `true`, never by clicking in the console.
-Until that moment the correct state of this project is **asleep**.
+**What that constraint forces:** every billable resource gets a Terraform gate
+defaulting to off, and a gate is `count = 0`, not merely "disabled" — a disabled
+schedule is free, a created shard is not. Two flags carry this today, both `false`:
+
+| Flag | Gates | Cost when open |
+|---|---|---:|
+| `eventbridge_rule_enabled` | the CMC extractor's schedule | ~$0 (CMC free tier) |
+| `streaming_enabled` | the Kinesis stream, the Firehose delivery stream, the producer's `desired_count` | ~$25/mo |
+
+Everything that is free to exist — VPC without a NAT Gateway, security groups, IAM
+roles, ECR repositories, task definitions, log groups, Glue jobs, the state machine
+— is applied for real. The lake is fully built and fully asleep.
+
+Waking up is flipping those flags, deliberately and as code, never by clicking in
+the console. Until that moment the correct state of this project is **asleep**.
 
 Phase 3 deliberately did not wake anything, and this was checked rather than
 assumed: all three rules were re-read from AWS after the apply and are still
@@ -75,7 +91,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
 | 3 | Terraform refactor into modules | ✅ Done | `phase-3/terraform-modules` | 69 `moved {}` blocks, **0 destroyed** on the structural apply. 6 modules + `envs/crypto/`. Plan clean |
 | 4 | Data source strategy (Binance WS + CMC) | ✅ Done | `phase-4/data-source-strategy` | 50 ids frozen in `config/tracked_assets.json`, 45 streamed + 5 CMC-only. CMC quota 86% → 7.3%. No infra touched |
-| 5 | Streaming ingestion (Kinesis + Firehose + producer) | ⬜ Not started | | Unblocked by 4. **Project wakes up here.** Producer hosting undecided; `ON_DEMAND` also now in question |
+| 5 | Streaming ingestion (Kinesis + Firehose + producer) | 🟡 In progress | `phase-5/streaming-ingestion` | Unblocked by 4. **Does NOT wake the project** — built behind `streaming_enabled = false`, $0/mo. Hosting: Fargate 24/7 (~$12.66/mo when opened); capacity: 1 provisioned shard (~$12.62/mo all-in) |
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler. Buckets/prefixes already settled in 2.1 |
 | 7 | Feature engineering | ⬜ Not started | | Extends existing Gold jobs |
 | 8 | Model training | ⬜ Not started | | Serverless, no VPC |
@@ -758,10 +774,9 @@ Phase 0 symptom has a second, far more mundane cause.
 
 **Scope**
 
-- `aws_kinesis_stream`. **Re-examine `ON_DEMAND` before defaulting to it** —
-  Phase 4 measured the real load (~185 events/s, ~45 KB/s and ~45 records/s after
-  batching) and a single provisioned shard is both ~20× oversized for it and ~3×
-  cheaper. See `data_sources.md` §9.
+- `aws_kinesis_stream` in **PROVISIONED mode with one shard** — decided below
+  against the Phase 4 measurements (~185 events/s, ~17.4 KB/s and ~70 records/s
+  after batching), not inherited as a default. See `data_sources.md` §9.
 - Producer holding the Binance WebSocket open, batching `put_records` with
   `PartitionKey` = asset symbol (preserves per-asset ordering within a shard).
 - Dedicated IAM role for the producer: `kinesis:PutRecord` / `PutRecords` scoped
@@ -770,10 +785,12 @@ Phase 0 symptom has a second, far more mundane cause.
   bucket, with `buffering_size` / `buffering_interval` matched to actual volume.
 - Dedicated IAM role for Firehose (read the source stream, write the destination
   bucket).
-- **The producer code ships to the artifacts bucket**, under
-  `s3://crypto-artifacts-913524903233/producer/`, exactly like the Glue job scripts
-  already do under `jobs/`. No new bucket is created for it — see the storage rule
-  in Phase 2.1.
+- **The producer ships as a container image to ECR**, not as a zip to the artifacts
+  bucket. This is a deliberate deviation from the Phase 2.1 storage rule and it is
+  worth naming: a Fargate task *pulls an image*, it cannot download a zip from S3
+  and run it. Shipping both would recreate exactly the two-owners-for-one-fact
+  problem that rule exists to prevent. The rule still binds everything that really
+  is an artifact file — Glue scripts stay under `jobs/`. No new S3 bucket is created.
 - Retune the existing CMC Lambda: 5 min → 1 hour, 11 assets → the frozen 50.
 - **Read the asset list from `config/tracked_assets.json`**, not from a literal in
   tfvars — the producer takes its subscription list from the same file, filtered on
@@ -785,54 +802,196 @@ Phase 0 symptom has a second, far more mundane cause.
   `serverShutdown` event and the 20 s ping / 1 min pong contract as routine paths,
   not error paths (`data_sources.md` §8).
 
-**⚠️ OPEN DECISION — where the producer runs. Deliberately unresolved.**
+**✅ DECIDED — where the producer runs, and the capacity mode.**
 
-This is the first decision in the project that introduces a recurring bill, and
-it is not going to be rushed or defaulted into. No producer code gets written
-until it is settled. The options, with their real trade-offs:
+Both open questions were settled on **2026-09-01**, against the Phase 4
+measurements, before any producer code was written. Recorded here with their costs
+because this is the first recurring bill in the project and it should read as a
+choice, not a default.
 
-| Option | Cost | What it buys | What it costs you |
-|---|---|---|---|
-| **ECS/Fargate 24/7** | ~$10–15/mo at 0.25 vCPU | A genuinely always-on streaming consumer; front-loads the Phase 12 Docker/Fargate learning | First permanent bill in the project; runs whether or not anyone is looking |
-| **Time-boxed Fargate** | ~$10–15 once | Same architecture, captured as screenshots/video/metrics for the portfolio, then scaled to zero | The demo is a recording, not a live system |
-| **Lambda + Binance REST** | ~free | No fixed cost, no CMC-style credit ceiling | Still polling, not streaming — weakens the core claim of the project |
-| **Other** | — | Still worth exploring: Kinesis Data Streams consumers, App Runner, EC2 spot, a scheduled Fargate task | Not yet investigated |
+**Decision 1: the producer runs on ECS/Fargate, 24/7, at 0.25 vCPU / 0.5 GB.**
 
-A WebSocket needs a persistent process, so Lambda's 15-minute ceiling rules it
-out for options 1–2. Note the tension worth thinking through: option 3 is free
-but undercuts the "near real time" claim in the project's own name, while option
-1 is the only one that is genuinely always-on.
+| Line item | Monthly |
+|---|---:|
+| Fargate compute — 0.25 vCPU × $0.04048 + 0.5 GB × $0.004445, × 730 h | $9.01 |
+| Public IPv4 address — $0.005/h × 730 h | $3.65 |
+| **Producer host total** | **~$12.66** |
 
-**Status: to be decided by Angel.** Not a default, not a recommendation to be
-quietly adopted — an explicit choice to be made and then written down here with
-its reasoning.
+The alternatives and why they lost: **time-boxed Fargate** turns the demo into a
+recording and makes every Phase 13 iteration a manual start/stop; **Lambda +
+Binance REST** is free but is still polling, which contradicts the project's own
+name and collapses under the first follow-up question in an interview. The honest
+argument *against* 24/7 is worth recording too: since the Phase 4 backfill supplies
+the training history for free, the stream's marginal value is the tick-level block
+and the "near real time" claim itself — not the ability to train a model. That was
+judged worth $12.66/month, given Phase 13 needs a live consumer.
+
+**The task runs in a public subnet with a public IP and a security group with no
+inbound rules.** This is not incidental: a private subnet would need a NAT Gateway
+at **~$33/month**, which costs more than triple the compute it exists to serve. The
+producer only makes outbound connections, so it does not need one.
+
+**`desired_count` is a Terraform variable**, exactly like `eventbridge_rule_enabled`
+— scaling the producer to zero is a commit, never a click, and the dormancy pattern
+established in Phase 2.1 is preserved rather than abandoned the moment something
+costs money.
+
+**Decision 2: `ON_DEMAND` is rejected — one provisioned shard.**
+
+The Phase 4 scope flagged this as inherited-by-default rather than chosen. Measured
+throughput is **17.4 KB/s and ~70 records/s**, against a single shard's 1 MB/s and
+1,000 records/s: **60× and 14× headroom**. One shard is **$10.95/month flat**
+against **$29.20/month in on-demand stream-hour charges before a byte is written**
+($12.62 vs $36.38 all-in with Firehose and S3, for identical data). On-demand earns
+its premium on unpredictable spiky load; this load is small and now measured.
+
+Second-order benefit, carried forward to Phase 7: provisioned bills **25 KB PUT
+units** rather than GB, so batched BTC+ETH `@bookTicker` would cost ~$2/month here
+against well over $100 unbatched on on-demand. If spread and microprice features are
+ever wanted, this decision is what leaves that door open.
+
+**Running total once Phase 5 is live: ~$25/month** ($12.66 producer + $12.62
+ingestion path). Set a CloudWatch billing alarm as part of this phase — the point of
+measuring all of this is defeated if nobody notices it drifting.
+
+**Decision 3: the project does NOT wake up in this phase. Dormancy is now
+permanent until the whole project is built.**
+
+This overrides what this phase said until 2026-09-01, and it changes the design
+rather than just the schedule. Two of the three numbers above are **not idle
+costs**:
+
+| Resource | Cost while dormant | Why |
+|---|---:|---|
+| Kinesis provisioned shard | **$10.95/mo** | A shard bills **from creation**, at zero traffic. On-demand is worse: $29.20/mo in stream-hours before a byte is written |
+| Firehose delivery stream | $0 | Billed per GB ingested; nothing ingested, nothing billed |
+| ECS service at `desired_count = 0` | $0 | No task, no vCPU-hours, no public IP |
+| ECR repository | ~$0.10/mo | 500 MB free tier; a ~120 MB image sits inside it |
+| VPC, subnets, IGW, SG, IAM, log groups | $0 | Free to exist. **No NAT Gateway** — that would be $33/mo of pure idle cost |
+
+So "build it but leave it switched off" is not achievable by setting
+`desired_count = 0` alone: **the Kinesis stream and Firehose must not exist at
+all** while dormant, or the project starts paying $10.95/month for a phase that is
+still years from serving a prediction.
+
+**The gate is `streaming_enabled`, a single Terraform variable defaulting to
+`false`**, applied with `count` to exactly the billable resources — the stream, the
+Firehose delivery stream, and the producer's desired count. Everything else is
+applied for real, today: VPC, security group, ECR repository, task definition, IAM
+roles, log groups. The consequence is the one that matters — **`terraform apply`
+on this phase creates a complete, reviewable, plan-clean streaming stack that costs
+$0/month**, and waking it up later is one variable, not a rebuild.
+
+This is the same pattern as `eventbridge_rule_enabled`, extended from "a schedule
+is disabled" to "a billable resource does not exist". Both stay `false`.
+
+**What this costs the DoD.** "End-to-end verified: a Binance tick lands as an object
+in S3" is not provable with the gate closed. It is therefore split: the stack is
+verified by `terraform plan`/`apply` and by running the producer against Binance
+locally (the WebSocket is public and free, so the producer can be proved to connect,
+parse and batch without any AWS resource existing). The single end-to-end assertion
+— a tick in S3 — is **explicitly deferred**, and it is the first thing done when the
+project is woken up.
 
 **DoD**
-- [ ] Kinesis stream in ON_DEMAND, defined in Terraform
-- [ ] Producer running, connected, writing records with symbol as partition key
-- [ ] Producer IAM role scoped to the stream ARN
-- [ ] Firehose delivering into the bronze bucket, buffering tuned and justified
-- [ ] Producer package uploaded to `crypto-artifacts-913524903233/producer/`, not to a new bucket
-- [ ] CMC Lambda retuned to hourly / the frozen 50, reading `config/tracked_assets.json`
-- [ ] `ON_DEMAND` vs one provisioned shard decided against the Phase 4 measurements, with the choice written down
-- [ ] Producer hosting decision made **explicitly**, with its monthly cost and
-      reasoning written into this file before any producer code is written
-- [ ] End-to-end verified: a Binance tick lands as an object in S3
-- [ ] EventBridge rules re-enabled via `eventbridge_rule_enabled = true` — this is
-      the phase where the project wakes up (see *Current state: DORMANT*)
+- [x] `ON_DEMAND` vs one provisioned shard decided against the Phase 4 measurements, with the choice written down — **one provisioned shard**
+- [x] Producer hosting decision made **explicitly**, with its monthly cost and
+      reasoning written into this file before any producer code is written —
+      **Fargate 24/7, ~$12.66/month**
+- [x] `streaming_enabled` gate defaulting to `false`, applied with `count` to every billable resource
+- [x] Kinesis stream in PROVISIONED mode, one shard, defined in Terraform (created only behind the gate)
+- [x] Producer written, connected, batching per symbol with the symbol as partition key
+- [x] Producer IAM role scoped to the stream ARN — composed, not read from the resource, so the policy survives the gate being shut
+- [x] Firehose delivering into the bronze bucket, buffering tuned and justified (5 MiB / 300 s, and why not 60 s)
+- [x] ~~Producer package uploaded to `crypto-artifacts-913524903233/producer/`~~ — **superseded**: it ships as an ECR image. A Fargate task pulls an image, it cannot run a zip from S3. No new bucket either way
+- [x] Producer task in a **public subnet with a public IP, no NAT Gateway**, security group with no inbound rules
+- [x] `desired_count` exposed as a Terraform variable, mirroring `eventbridge_rule_enabled`
+- [x] CMC Lambda retuned to hourly / the frozen 50, reading `config/tracked_assets.json`
+- [x] Cost guard in place, so it is already watching on the day the gate opens — AWS Budgets, not a CloudWatch billing alarm; see the reasoning in `modules/observability/main.tf`
+- [x] Producer proved against the live Binance WebSocket **locally** — 45 symbols, 90 streams, one connection, zero drops — with no AWS resource created
+- [ ] `terraform plan` clean, and `apply` proving the ungated scaffold costs $0/month
+- [ ] ~~End-to-end verified: a Binance tick lands as an object in S3~~ — **deferred**, see Decision 3; first task on wake-up
+- [ ] ~~EventBridge rules re-enabled~~ — **deferred**. `eventbridge_rule_enabled` and
+      `streaming_enabled` both stay `false`; the project does not wake up in this phase
+
+**What actually happened**
+
+**1. The producer was proved against live Binance without a single AWS resource
+existing.** `DRY_RUN=1 python producer/producer.py` reads
+`config/tracked_assets.json`, opens one connection carrying all 90 streams and
+counts what arrives. A 155-second sample on 2026-09-01:
+
+| | |
+|---|---:|
+| Symbols / streams / connections | 45 / 90 / **1** |
+| Events received | 8,384 — **52.2/s** |
+| Kinesis records produced | 817 — **5.1/s** |
+| Events per record | **10.3** |
+| Throughput | **12.6 KB/s** |
+| Dropped / retried / reconnects | **0 / 0 / 0** |
+
+**2. Phase 4's record rate was wrong by 14×, in the safe direction.**
+`data_sources.md` §9 costed the tuned build at "70 rec/s **after batching**" — it
+batched the *bytes* in its model but kept the unbatched *record count*, which is
+inconsistent. Batching per symbol actually yields **5.1 records/s**. Against one
+provisioned shard's 1,000 records/s that is **196× headroom**, not 14×, and the
+PUT-payload-unit charge falls to ~$0.19/month, so the $12.62 estimate is now
+almost entirely the $10.95 shard. The capacity-mode decision does not change —
+it gets stronger.
+
+**3. The event rate landed exactly where the `@aggTrade` measurement predicted.**
+Phase 4 counted ~185 trade events/s across the 45 pairs and measured `@aggTrade`
+at 3.86× fewer frames, which implies ~48/s. Measured: 52.2/s. That is the first
+independent confirmation that the `@trade` → `@aggTrade` substitution behaves as
+measured rather than as hoped.
+
+**4. Two failure modes were designed for rather than discovered later.**
+`put_records` returns **HTTP 200 with a `FailedRecordCount`** — individual
+records can be throttled while the call "succeeds", so code that only catches
+exceptions loses them silently, and silent loss in a market feed is
+indistinguishable from a quiet market. It is retried explicitly. And the queue
+is **bounded**: unbounded, a Kinesis outage becomes an OOM kill several minutes
+later that reads as a crash instead of as the throughput problem it is. Overflow
+is dropped and counted.
+
+**5. A hang was found and fixed before it could ship.** `main()` waited on the
+stop signal alone. `consume()` reconnects from any exception, so it "should
+only" finish when asked — but if it ever did exit, the process would sit there
+holding a healthy ECS task producing nothing, which is worse than crashing
+because nothing alerts on it. It now waits on the stop signal **or** the
+consumer dying, and exits non-zero so ECS records a failure.
+
+**6. The one deliberate deviation from a standing project rule.** Phase 2.1 sends
+build artifacts to `crypto-artifacts-<acct>/`. The producer ships as an ECR image
+instead, because a Fargate task pulls an image and cannot run a zip from S3.
+Shipping both would put one fact in two places — exactly what that rule exists to
+prevent. The Glue scripts still obey it. Recorded here rather than left for a
+reader to notice.
+
+**7. The tracked-asset list left tfvars, and that mattered more than it looked.**
+`tracked_asset_ids` is now derived in `main.tf` from
+`config/tracked_assets.json`. `terraform.tfvars` is **gitignored**, so the old
+copy was invisible to code review and free to differ on every machine, while the
+Lambda, the producer and the Gold join all believed they tracked the same
+universe. One owner per fact, the same rule Phase 2.1 applied to bucket names.
 
 **Prompt to run**
 
-> Phase 5 of roadmap.md: build the streaming ingestion path. Add a Kinesis stream
-> in ON_DEMAND mode, a Firehose delivery stream into the existing bronze bucket,
-> and the Binance WebSocket producer, each with its own least-privilege IAM role
-> scoped by ARN. Retune the CMC Lambda to hourly and the top-50 asset list.
-> Before writing ANY producer code, stop and walk me through the hosting decision
-> (Fargate 24/7 vs time-boxed vs Lambda REST polling vs anything I have not
-> considered) with real monthly costs — this is my call to make, not yours to
-> default into. Once I have decided, build it and verify end-to-end that a Binance
-> tick reaches S3. This is also the phase where the project wakes up: re-enable
-> the EventBridge rules through `eventbridge_rule_enabled`, never in the console.
+> Phase 5 of roadmap.md: build the streaming ingestion path. The two open
+> decisions are settled and written into the phase — one PROVISIONED shard, and
+> the producer on Fargate 24/7 in a public subnet with no NAT Gateway. Add the
+> Kinesis stream, a Firehose delivery stream into the existing bronze bucket, and
+> the Binance WebSocket producer, each with its own least-privilege IAM role scoped
+> by ARN. Subscribe `@aggTrade` + `@kline_1m` on the 45 symbols with
+> `has_stream: true` in `config/tracked_assets.json`, batching to ~5 KB records.
+> Retune the CMC Lambda to hourly and the frozen 50, reading the same file.
+> Add a CloudWatch billing alarm so it is watching before the gate ever opens.
+> **Nothing is woken up.** Put every billable resource behind a `streaming_enabled`
+> variable defaulting to false, applied with `count` — a Kinesis shard bills from
+> creation, so "disabled" is not enough, it must not exist. The apply must create a
+> complete streaming stack that costs $0/month. Prove the producer against the live
+> Binance WebSocket locally instead; the end-to-end tick-to-S3 check waits for the
+> wake-up at the end of the project.
 
 ---
 
@@ -1201,6 +1360,7 @@ phase. Each is tagged with where it gets resolved.
 | Use `@aggTrade`, not `@trade`; keep `@bookTicker` out of the baseline | Phase 5 | `@aggTrade` is 3.86× fewer frames with no loss at a 1-minute grain. `@bookTicker` was recommended before being measured and is 7.7× BTC's `@aggTrade` rate — measuring it reversed the call. Naive build $217/mo, tuned $12.62/mo |
 | Batch producer writes to ~5 KB records | Phase 5 | Kinesis on-demand rounds every record up to 1 KB and the frames are 146–360 bytes, so one-record-per-event bills ~4× the bytes actually sent |
 | **Producer hosting: Fargate 24/7 vs time-boxed vs Lambda polling** | Phase 5 | ⚠️ Open decision, Angel's call. First recurring cost in the project — not to be defaulted into |
+| **Two deployed names now lie, and Phase 5 made it worse** | Phase 6 | The EventBridge rule is `schedule-fetch-top10-5-min-bronze-crypto` and the Lambda is `fetch-top10-crypto-crypto`. Neither was ever accurate — the list was 11, not 10 — and Phase 5 made both wrong twice over: 50 assets, hourly. `name` is ForceNew on both, so fixing them is a destroy+create. Deliberately NOT done in Phase 5, to keep its plan at **0 destroyed**; Phase 6 already touches this surface and both resources are DISABLED, so it is the cheap moment. The same reasoning Phase 3 used to rename the EventBridge `target_id` |
 | **Backfill the Binance kline archive from 2017** | Phase 7 | Free at `data.binance.vision`, no key: 3,135 asset-months, ~133M 1-minute candles, ~4.4 GB, $0, and it bypasses Kinesis. Reaches 2017-07 (Binance's own start), not 13 years. Use klines, never aggTrades — one month of BTCUSDT aggTrades is 362 MB against 2.1 MB for klines |
 | Resample the stream to 1-minute bars in Gold to meet the backfill | Phase 7 | The archive and the live `@kline_1m` event are the same twelve fields from the same exchange, so the stitch is exact. Carry `source ∈ {backfill, stream}` and validate on the overlap |
 | Stitch pre-rename tickers when backfilling | Phase 7 | `RNDRUSDT` holds 33 months RENDER does not; `MATICUSDT` holds 66 months POL does not. `binance_symbol_aliases` in `config/tracked_assets.json` exists for this |
@@ -1238,9 +1398,12 @@ choosing Binance WebSocket forces a persistent producer, which pulls part of Pha
 the learning that matters most. Phase 4 is now done, so Phase 5 is unblocked on
 everything except its own hosting decision.
 
-**The project stayed dormant through Phases 3 and 4** — as it already had through
-2 and 2.1. Those phases touch code, structure and decisions, and in 2.1
-deliberately deleted the existing data, but none of them brings running
-infrastructure back up. Phase 5 is the first one that puts data back in motion,
-and the wake-up is a deliberate act with two preconditions (see *Current state:
-DORMANT* at the top of this file), not a side effect of an apply.
+**The project stays dormant through every phase.** It already had through 2, 2.1,
+3 and 4; Phase 5 was written as the phase that would put data back in motion, and
+on 2026-09-01 that was reversed — the wake-up moved to the end of the project, once
+the whole stack exists (see *Current state: DORMANT* at the top of this file).
+The reason is that a Kinesis shard bills from creation rather than from use, so
+waking up in Phase 5 would mean carrying a recurring bill through years of phases
+that do not need it. Dormancy is therefore not a waiting room any more, it is a
+design constraint: billable resources are gated to `count = 0`, and the wake-up
+stays a deliberate act, never a side effect of an apply.
