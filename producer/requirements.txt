@@ -1,0 +1,6 @@
+# Pinned exactly, for the same reason the Terraform provider is: a floating
+# constraint means the image built today and the image built in six months are
+# different software, and the difference shows up as a runtime failure in a
+# process that is supposed to stay connected for weeks.
+websockets==13.1
+boto3==1.35.49
