@@ -41,8 +41,8 @@ laptop no longer loses the project.
 
 This is intentional, not an outage. Waking it up while the code is still being
 restructured would mean accumulating data in a Bronze layout that Phase 6 is
-going to change anyway, and burning CMC credits on an asset list that Phase 4 is
-going to replace.
+going to change anyway. (The second reason — burning CMC credits on an asset list
+Phase 4 was going to replace — is now spent: Phase 4 froze the list.)
 
 Stronger still: **Phase 2.1 already deleted the lake** — 294,507 objects and
 versions removed on purpose. The four buckets exist and are empty, so there is
@@ -74,8 +74,8 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 2 | Remote backend on S3 | ✅ Done | `phase-2/remote-backend` → `master` [#2] | State on `crypto-tf-state-913524903233`, native S3 locking. Plan clean, local state deleted |
 | 2.1 | One bucket per layer, clean slate | ✅ Done | `phase-2.1/storage-refactor` → `master` [#1] | 4 buckets created, 3 destroyed, 294,507 objects/versions deleted. Plan clean |
 | 3 | Terraform refactor into modules | ✅ Done | `phase-3/terraform-modules` | 69 `moved {}` blocks, **0 destroyed** on the structural apply. 6 modules + `envs/crypto/`. Plan clean |
-| 4 | Data source strategy (Binance WS + CMC) | ⬜ Not started | | Decision phase, no infra. Fixed 50-asset list |
-| 5 | Streaming ingestion (Kinesis + Firehose + producer) | ⬜ Not started | | Depends on 4. **Project wakes up here.** Producer hosting undecided |
+| 4 | Data source strategy (Binance WS + CMC) | ✅ Done | `phase-4/data-source-strategy` | 50 ids frozen in `config/tracked_assets.json`, 45 streamed + 5 CMC-only. CMC quota 86% → 7.3%. No infra touched |
+| 5 | Streaming ingestion (Kinesis + Firehose + producer) | ⬜ Not started | | Unblocked by 4. **Project wakes up here.** Producer hosting undecided; `ON_DEMAND` also now in question |
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler. Buckets/prefixes already settled in 2.1 |
 | 7 | Feature engineering | ⬜ Not started | | Extends existing Gold jobs |
 | 8 | Model training | ⬜ Not started | | Serverless, no VPC |
@@ -578,10 +578,14 @@ the crawler.
 
 ---
 
-## Phase 4 — Data source strategy
+## Phase 4 — Data source strategy ✅
 
 **Goal:** decide what actually feeds the pipeline, before writing any Kinesis
 code. This decision reshapes everything downstream.
+
+**Done.** The full decision record is [`data_sources.md`](./data_sources.md); the
+frozen universe is [`config/tracked_assets.json`](./config/tracked_assets.json).
+No Terraform was touched and nothing was woken up.
 
 **The problem with the current source.** The Lambda polls CoinMarketCap every
 5 minutes ≈ 8,640 calls/month. CMC's free tier is 10,000 credits/month, and
@@ -598,9 +602,18 @@ an interview.
 | **Binance WebSocket** | Real-time price/volume ticks — the actual streaming feed | continuous |
 | **CoinMarketCap REST** | Market cap, circulating supply, dominance — data no exchange provides | hourly (down from 5 min) |
 
+CMC is **not** replaced, it is repositioned. Market cap, supply and dominance are
+properties of an *asset*, not of a *trading pair*: an exchange only knows what
+trades on it. CMC also supplies cross-validation against a single venue's price,
+covers the five tracked assets that have no Binance pair at all, and keeps writing
+if the WebSocket drops, so an outage degrades the pipeline to coarse instead of
+blind.
+
 **Also decided:** expand coverage from the current 11 assets to **50**.
-This changes the CMC credit math (`quotes/latest` bills per 100 items, so 50 ids
-still costs 1 credit/call; hourly = ~730 credits/month, comfortably under quota).
+Confirmed against CMC's own billing rule: `quotes/latest` costs 1 credit per call
+per 100 cryptocurrencies returned, so 50 ids in one batched call still costs
+**1 credit** — going from 11 to 50 assets costs nothing. Hourly = **730
+credits/month, 7.3% of the free tier**, down from 86.4%.
 
 **Decided: the asset list is STATIC — a hand-picked set of 50, not a live top-50
 ranking.** A dynamic `listings/latest` lookup would silently change the tracked
@@ -610,30 +623,120 @@ null gaps where an asset entered or left, and a dataset from six months ago
 becomes uninterpretable. The list is therefore curated once, committed as code,
 and changed only by an explicit commit.
 
-The current 11 ids are provisional. The final 50 will be chosen deliberately —
-selection criteria still to be worked out, but the shape that matters for ML is
-diversity of behaviour, not market-cap rank: large caps, alternate L1s, at least
-one stablecoin as a negative control (near-zero volatility — if the model emits
-signals on it, the model is broken), and something high-volatility.
+**Decided: the selection criterion is diversity of BEHAVIOUR, not market-cap
+rank.** The top 50 by market cap is fifty variations of the same thing — liquid
+assets that mostly track Bitcoin. The final set is built from ten cohorts: 8 beta
+anchors, 4 stablecoins (the negative control), 2 gold-pegged tokens (a non-crypto
+risk factor inside the crypto tape), 10 alt-L1s, 3 L2s, 6 PoW/legacy payments,
+7 DeFi, 4 AI/compute, 4 memecoins, and 2 assets chosen precisely because the
+stream cannot see them. Ten of the provisional 11 ids survive; BAT (`1697`) is
+dropped as behaviourally redundant.
 
-**Scope**
+**Decided: Silver stays source-separated and the join happens in GOLD.** This
+closes the question Phase 2.1 left open. Silver's contract is "Bronze, cleaned and
+typed" — merging two sources is a modelling decision. And the grains do not match:
+joining at Silver would mean either downsampling the stream to hourly, throwing
+away the entire point of Phase 5, or upsampling CMC to tick grain, which fabricates
+rows that were never observed. Gold's prefixes were already made dataset names in
+Phase 2.1 on the grounds that Gold "is already the join"; this makes that literal.
 
-- Curate and freeze the 50-asset CMC id list; commit it as code with a short note
-  on why each asset is in it.
-- Map the Binance symbol universe to the CMC id universe. They will not overlap
-  perfectly: some assets have no Binance USDT pair. Decide the join key and what
-  happens to assets present in one source only.
-- Document why two sources, and what the Silver-layer join between them looks like.
-  This join is the most interesting thing to defend in an interview — far more so
-  than "I poll an API".
+**DoD** ✅
+- [x] Final 50-asset list curated and frozen, with the CMC id ↔ Binance symbol mapping written down — `config/tracked_assets.json`, generated and validated against live data, not hand-typed
+- [x] Selection rationale recorded per asset (why this one is tracked) — one line per asset, in the file and in `data_sources.md`
+- [x] List committed as code; no runtime `listings/latest` lookup anywhere
+- [x] CMC credit budget recomputed and documented under the free tier — 730/10,000 credits/month (7.3%), and 24/~333 per day
+- [x] Silver-layer join strategy between the two sources documented — as-of backward join on `cmc_id`, executed in Gold, with staleness as a column
+- [x] Decision and rationale written into `README.md`, not just this roadmap
+- [x] No Terraform changed, nothing woken up — the project is still dormant
 
-**DoD**
-- [ ] Final 50-asset list curated and frozen, with the CMC id ↔ Binance symbol mapping written down
-- [ ] Selection rationale recorded per asset (why this one is tracked)
-- [ ] List committed as code; no runtime `listings/latest` lookup anywhere
-- [ ] CMC credit budget recomputed and documented under the free tier
-- [ ] Silver-layer join strategy between the two sources documented
-- [ ] Decision and rationale written into `README.md`, not just this roadmap
+**What actually happened**
+
+Four things came out of the execution that were not in the plan.
+
+**1. The mapping cannot be keyed on the ticker symbol, and this was proved rather
+than assumed.** Building the CMC ↔ Binance mapping against live data surfaced four
+distinct ways a symbol join silently corrupts a series: **case** (CMC writes
+`XAUt`, Binance's base asset is `XAUT`), **rename** (`RNDR` → `RENDER`, CMC id
+`5690` unchanged — `RNDRUSDT` no longer exists on Binance), **re-issue** (MATIC
+`3890` → POL `28321`; id `3890` still resolves today, as symbol `MATIC`, with
+`status = untracked`), and plain **collision** (several distinct CMC entries share
+a symbol). The join key is `cmc_id`, `binance_symbol` is an attribute of it, and
+`config/tracked_assets.json` is the bridge table read by the Lambda, the producer
+and the Gold job alike.
+
+**2. Five of the fifty have no Binance stream, and that is the point.** USDT
+(`825`) is *structurally* unstreamable — it is Binance's quote asset, so
+`USDTUSDT` cannot exist. XMR (`328`) and DAI (`4943`) were **delisted**: their
+pairs still appear in `exchangeInfo` as tombstones, every one of them `BREAK`.
+HYPE (`32196`) and KAS (`20396`) have **zero rows in any role or status** — never
+listed at all — and HYPE is a **top-10 asset by market cap**, which is the cleanest
+possible proof that the stream is not a superset of the market. The distinction
+matters operationally: a `BREAK` symbol accepts a subscription and then delivers
+nothing, which is exactly the silent failure `has_stream` exists to prevent. `has_stream` is therefore a config flag the jobs
+read, never an assumption in code — a future delisting is a one-line commit rather
+than an incident. Single-source assets are **excluded** from the high-frequency
+dataset rather than null-padded into it; padding would invent a regular series
+where none was observed.
+
+**3. The ingestion path costs more than the producer host — by a lot, if built
+naively.** Across the 45 streamed pairs Binance reported **15,960,612 trades in
+24 h**, ~185 events/second. A raw WebSocket client then measured the per-stream
+rates directly on the wire. Kinesis on-demand **rounds every record up to 1 KB**
+and the frames are 146–360 bytes, so one-record-per-event billing costs ~4× the
+bytes actually sent. All-in monthly, same data either way:
+
+   | Build | Total |
+   |---|---:|
+   | `@trade` + `@kline` + `@bookTicker`(8), unbatched, on-demand | **$217.46** |
+   | drop `@bookTicker` | $81.34 |
+   | `@aggTrade` instead of `@trade` | $47.78 |
+   | batch to ~5 KB records | $36.38 |
+   | **1 provisioned shard instead of on-demand** | **$12.62** |
+
+   Phase 5 frames its open hosting decision around $10–15/month for Fargate. The
+   ingestion path is the larger number, and the 17× spread between the two ends of
+   that table is entirely stream selection, batching and capacity mode. Three
+   consequences, all handed to Phase 5 rather than acted on here:
+   - **`@aggTrade` instead of `@trade`** — measured **3.86× fewer frames** live,
+     4.01×/4.69× on a replayed BTCUSDT/ETHUSDT minute, no information lost at a
+     one-minute grain.
+   - **`@bookTicker` is out of the baseline.** It was recommended before it was
+     measured; measuring reversed it. At **123.5 msg/s on BTCUSDT alone** it is
+     7.7× that symbol's `@aggTrade` rate, and BTC-only `@bookTicker` moves as much
+     data per month as `@aggTrade` + `@kline_1m` over all 45 symbols combined.
+   - **`ON_DEMAND` looks like the wrong default.** Measured throughput is
+     **17.4 KB/s and ~70 records/s**, against a single provisioned shard's 1 MB/s
+     and 1,000 records/s — 60× and 14× headroom, at **$10.95/month flat** versus
+     **$29.20/month in on-demand stream-hour charges before a byte is written**.
+     It also changes which streams are affordable: provisioned bills 25 KB PUT
+     units rather than GB, so batched BTC+ETH `@bookTicker` would add ~$2/month
+     there against well over $100 unbatched on on-demand.
+
+**4. Not a single CMC credit was spent, and the API key was never read.** CMC ids
+and market caps were verified against CoinMarketCap's own public listing endpoint
+(`api.coinmarketcap.com/data-api/v3/...`), which needs no key. The Binance symbol
+universe, volumes and trade counts came from `api.binance.com` public endpoints.
+Every command is recorded in `data_sources.md` §13 so the whole curation is
+reproducible.
+
+**5. There is a free historical archive, and nothing in this roadmap knew about
+it.** Phases 7, 8 and 13 need years of data; a stream switched on in Phase 5
+produces weeks. Binance publishes its full kline history at `data.binance.vision`,
+no key and no quota: **3,135 asset-months, ~133 million 1-minute candles, ~4.4 GB
+compressed, $0**, and it bypasses Kinesis entirely. It reaches **2017-07** and no
+further — Binance opened that month, so there is no 13-year history to fetch for
+any asset, which happens to land exactly where crypto stops being a different
+market. Crucially the stitch is **exact**: the archived file and the live
+`@kline_1m` event carry the same twelve fields computed by the same exchange over
+the same bucket, `number_of_trades` and the taker-buy volumes included — so the
+backfill carries order flow, not just OHLCV. Written up in `data_sources.md` §11.
+
+**A Phase 0 false alarm, recorded so it is not re-diagnosed.**
+`aws sts get-caller-identity` timed out (exit 124) mid-phase, which looks exactly
+like the Phase 0 egress failure. It was not: an active VPN was intercepting the
+traffic. With the VPN off the call returns
+`arn:aws:iam::913524903233:user/angel-adming` normally. Worth knowing that the
+Phase 0 symptom has a second, far more mundane cause.
 
 **Prompt to run**
 
@@ -655,7 +758,10 @@ signals on it, the model is broken), and something high-volatility.
 
 **Scope**
 
-- `aws_kinesis_stream` in `ON_DEMAND` mode.
+- `aws_kinesis_stream`. **Re-examine `ON_DEMAND` before defaulting to it** —
+  Phase 4 measured the real load (~185 events/s, ~45 KB/s and ~45 records/s after
+  batching) and a single provisioned shard is both ~20× oversized for it and ~3×
+  cheaper. See `data_sources.md` §9.
 - Producer holding the Binance WebSocket open, batching `put_records` with
   `PartitionKey` = asset symbol (preserves per-asset ordering within a shard).
 - Dedicated IAM role for the producer: `kinesis:PutRecord` / `PutRecords` scoped
@@ -668,7 +774,16 @@ signals on it, the model is broken), and something high-volatility.
   `s3://crypto-artifacts-913524903233/producer/`, exactly like the Glue job scripts
   already do under `jobs/`. No new bucket is created for it — see the storage rule
   in Phase 2.1.
-- Retune the existing CMC Lambda: 5 min → 1 hour, 11 assets → top 50.
+- Retune the existing CMC Lambda: 5 min → 1 hour, 11 assets → the frozen 50.
+- **Read the asset list from `config/tracked_assets.json`**, not from a literal in
+  tfvars — the producer takes its subscription list from the same file, filtered on
+  `has_stream`, so the two sources cannot drift apart in what they track.
+- Subscribe `@aggTrade` + `@kline_1m` on all 45 streamed symbols — 90 streams,
+  against a 1,024-per-connection limit. **No `@bookTicker` in the baseline**: it
+  measured at 123.5 msg/s on BTCUSDT alone, 7.7× that symbol's `@aggTrade` rate.
+  Batch writes to ~5 KB records. Handle the 24-hour forced disconnect, the
+  `serverShutdown` event and the 20 s ping / 1 min pong contract as routine paths,
+  not error paths (`data_sources.md` §8).
 
 **⚠️ OPEN DECISION — where the producer runs. Deliberately unresolved.**
 
@@ -698,7 +813,8 @@ its reasoning.
 - [ ] Producer IAM role scoped to the stream ARN
 - [ ] Firehose delivering into the bronze bucket, buffering tuned and justified
 - [ ] Producer package uploaded to `crypto-artifacts-913524903233/producer/`, not to a new bucket
-- [ ] CMC Lambda retuned to hourly / top-50
+- [ ] CMC Lambda retuned to hourly / the frozen 50, reading `config/tracked_assets.json`
+- [ ] `ON_DEMAND` vs one provisioned shard decided against the Phase 4 measurements, with the choice written down
 - [ ] Producer hosting decision made **explicitly**, with its monthly cost and
       reasoning written into this file before any producer code is written
 - [ ] End-to-end verified: a Binance tick lands as an object in S3
@@ -792,13 +908,29 @@ four states be removed from the Step Functions machine.
 
 **Scope**
 
+- **Backfill the history first, then compute features over the whole span.**
+  Download the free Binance kline archive (`data_sources.md` §11) into
+  `bronze/binance/`, stitching the pre-rename aliases from
+  `config/tracked_assets.json`, and **resample the streaming data to the same
+  1-minute grain in Gold** so old and new are one continuous table. The archive
+  and the live `@kline_1m` event are the same twelve fields from the same
+  exchange, so this is a concatenation, not an approximation. Carry
+  `source ∈ {backfill, stream}` as a column and validate the two against each
+  other on the overlap window.
 - Extend the existing Gold jobs (`gold_features_base`, `gold_ohlc`,
   `gold_ml_training`) with RSI, moving averages, volume-derived features.
+- **Layer the feature schema by data availability.** A core block computable from
+  1-minute OHLCV alone spans 2017 to now; tick-derived features only start when the
+  stream does. One flat schema would be mostly null in its most interesting columns.
 - Orchestrate at the right cadence — with streaming data, the daily trigger may
   no longer be the right grain.
 - Define and freeze the output feature schema that Phase 8 will consume.
 
 **DoD**
+- [ ] Historical archive backfilled into Bronze, aliases stitched, checksums verified
+- [ ] Streaming data resampled to 1-minute bars in Gold; backfill and stream form one continuous series with a `source` column
+- [ ] Backfill vs stream compared on the overlap window; any field-level divergence explained
+- [ ] Missing minutes treated as missing, never forward-filled (Binance's own archive has gaps: 44,515 of 44,640 minutes in `BTCUSDT-1m-2018-01`)
 - [ ] Indicators implemented and unit-verified against a known reference series
 - [ ] Feature schema documented and versioned
 - [ ] Job cadence chosen and justified against the streaming grain
@@ -806,7 +938,12 @@ four states be removed from the Step Functions machine.
 
 **Prompt to run**
 
-> Phase 7 of roadmap.md: implement feature engineering. Extend the existing Gold
+> Phase 7 of roadmap.md: implement feature engineering. FIRST backfill the free
+> Binance kline archive from `data.binance.vision` into Bronze — 2017 onward,
+> stitching the pre-rename aliases in `config/tracked_assets.json` — and resample
+> the streamed data to the same 1-minute grain in Gold so the two form one
+> continuous series, with a `source` column and an overlap-window validation.
+> Then extend the existing Gold
 > Glue jobs with RSI, moving averages and volume features. Verify the indicator
 > maths against a known reference series rather than trusting the output. Define
 > and freeze the feature schema that model training will consume, and pick the job
@@ -831,6 +968,10 @@ one — and it will be documented as an explicit decision, not an omission.
 - `aws_ecr_repository` for the training image, with pinned image versioning
   consistent with the project's `version = x.y.z` discipline.
 - Trained model artifact stored in S3 with versioning and lifecycle.
+
+**Depends on the Phase 7 backfill.** Training on a stream started in Phase 5 means
+training on weeks of data. The 2017-onward archive (`data_sources.md` §11) is what
+makes this phase possible at all.
 
 **DoD**
 - [ ] Training job runs end-to-end from Terraform-defined infrastructure
@@ -1054,8 +1195,17 @@ phase. Each is tagged with where it gets resolved.
 | Glue crawler S3 target is immutable under `CRAWL_NEW_FOLDERS_ONLY` | Phase 2.1 ✅ | Any future target change needs `-replace`, not an update. Moot once Phase 6 deletes the crawler |
 | **Delete the current lake data — deliberate clean slate** | Phase 2.1 ✅ | Incomplete series, provisional 11-asset list, polling-era design. Angel's call: start from zero rather than migrate |
 | Unused `gold_spark_ui_prefix` variable | Phase 2.1 ✅ | Deleted there; its orphaned comment was swept in Phase 3 ✅ |
-| Curate the final 50-asset list | Phase 4 | Static and hand-picked, never a live ranking. The current 11 ids are provisional |
+| Curate the final 50-asset list | Phase 4 ✅ | Frozen in `config/tracked_assets.json`: 50 ids across 10 behavioural cohorts, 45 with a Binance USDT pair, 5 CMC-only. BAT (`1697`) dropped from the provisional 11 |
+| Wire `tracked_asset_ids` to `config/tracked_assets.json` | Phase 5 | Phase 4 wrote the file but changed no Terraform. tfvars still holds the literal 11 ids; Terraform should read the list with `jsondecode(file(...))` so the asset list has one owner, same rule as bucket and job names |
+| Kinesis `ON_DEMAND` vs 1 provisioned shard | Phase 5 | Measured load is 17.4 KB/s and ~70 rec/s vs a shard's 1 MB/s / 1,000 rec/s. On-demand costs $29.20/mo in stream-hours alone before a byte is written; a shard is $10.95/mo flat, and its 25 KB PUT-unit billing also makes `@bookTicker` affordable later. See `data_sources.md` §9 |
+| Use `@aggTrade`, not `@trade`; keep `@bookTicker` out of the baseline | Phase 5 | `@aggTrade` is 3.86× fewer frames with no loss at a 1-minute grain. `@bookTicker` was recommended before being measured and is 7.7× BTC's `@aggTrade` rate — measuring it reversed the call. Naive build $217/mo, tuned $12.62/mo |
+| Batch producer writes to ~5 KB records | Phase 5 | Kinesis on-demand rounds every record up to 1 KB and the frames are 146–360 bytes, so one-record-per-event bills ~4× the bytes actually sent |
 | **Producer hosting: Fargate 24/7 vs time-boxed vs Lambda polling** | Phase 5 | ⚠️ Open decision, Angel's call. First recurring cost in the project — not to be defaulted into |
+| **Backfill the Binance kline archive from 2017** | Phase 7 | Free at `data.binance.vision`, no key: 3,135 asset-months, ~133M 1-minute candles, ~4.4 GB, $0, and it bypasses Kinesis. Reaches 2017-07 (Binance's own start), not 13 years. Use klines, never aggTrades — one month of BTCUSDT aggTrades is 362 MB against 2.1 MB for klines |
+| Resample the stream to 1-minute bars in Gold to meet the backfill | Phase 7 | The archive and the live `@kline_1m` event are the same twelve fields from the same exchange, so the stitch is exact. Carry `source ∈ {backfill, stream}` and validate on the overlap |
+| Stitch pre-rename tickers when backfilling | Phase 7 | `RNDRUSDT` holds 33 months RENDER does not; `MATICUSDT` holds 66 months POL does not. `binance_symbol_aliases` in `config/tracked_assets.json` exists for this |
+| Layer the feature schema by data availability | Phase 7 | 1-minute OHLCV features span 2017→now; tick-derived features start at Phase 5. One flat schema would be mostly null where it matters |
+| Optional: BTC-quoted pairs for pre-2019 depth | Phase 7 | `ZECBTC`, `LINKBTC`, `XMRBTC` reach 16 months further than their USDT pairs. Needs a synthetic USD series (`price_btc × BTCUSDT`), so flag provenance and never mix it in silently |
 | Firehose partitioning: dynamic vs native prefix | Phase 6 | Deep analysis required; affects Silver and cost |
 | SNS topic policy blocks `cloudwatch.amazonaws.com` | Phase 11 | Alarms would fail silently |
 | Split SNS into ops vs signals topics | Phase 11 | |
@@ -1082,12 +1232,13 @@ criterion is a zero-diff plan and destroying three buckets is not zero diffs, an
 because writing the `storage/` module once, against the final four-bucket shape,
 beats rewriting it the week after it is frozen.
 
-And: **Phase 4 (data source decision) must be settled before Phase 5**, because
+And: **Phase 4 (data source decision) had to be settled before Phase 5**, because
 choosing Binance WebSocket forces a persistent producer, which pulls part of Phase
 12's Docker/Fargate work forward. That is a feature, not a problem — it front-loads
-the learning that matters most.
+the learning that matters most. Phase 4 is now done, so Phase 5 is unblocked on
+everything except its own hosting decision.
 
-**The project stays dormant through Phases 3 and 4** — as it already did through
+**The project stayed dormant through Phases 3 and 4** — as it already had through
 2 and 2.1. Those phases touch code, structure and decisions, and in 2.1
 deliberately deleted the existing data, but none of them brings running
 infrastructure back up. Phase 5 is the first one that puts data back in motion,
