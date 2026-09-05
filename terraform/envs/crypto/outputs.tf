@@ -94,6 +94,11 @@ output "glue_jobs" {
 }
 
 # --- Orchestration & alerting ----------------------------------------------
+output "daily_pipeline_enabled" {
+  description = "Whether the daily Silver -> Gold schedule is ENABLED. False means dormant. Phase 6 gave this rule an explicit gate; before that its state was set in the console and asserted nowhere in code."
+  value       = var.sfn_daily_schedule_enabled
+}
+
 output "state_machine_arn" {
   description = "ARN of the daily Gold pipeline state machine."
   value       = module.orchestration.state_machine_arn

@@ -42,3 +42,9 @@ variable "daily_schedule_cron" {
   description = "EventBridge cron (UTC) driving the daily Silver -> Gold run."
   type        = string
 }
+
+variable "daily_schedule_enabled" {
+  description = "Whether the daily pipeline's EventBridge rule is ENABLED. False while the project is dormant. Added in Phase 6: this rule starts five Glue jobs and had no gate in code at all, so its dormancy lived only in the console."
+  type        = bool
+  default     = false
+}

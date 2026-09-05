@@ -193,6 +193,25 @@ variable "streaming_projection_start_date" {
   default     = "2026-09-01"
 }
 
+variable "sfn_daily_schedule_enabled" {
+  description = <<-EOT
+    Whether the daily Silver -> Gold EventBridge rule is ENABLED. False while
+    the project is dormant, which is its default state.
+
+    Added in Phase 6, closing a gap rather than adding a feature: this rule
+    starts an execution that runs five Glue jobs, and its `state` was not set
+    in Terraform at all -- so the fact that it was switched off lived in the
+    AWS console and nowhere in this repository.
+
+    It is a `state` flag and not a `count` gate, on purpose. A DISABLED
+    EventBridge rule is free, so it may exist while off; that is the same
+    distinction Phase 5 drew when `streaming_enabled` had to drive `count`,
+    because a Kinesis shard bills from creation.
+  EOT
+  type        = bool
+  default     = false
+}
+
 # --- Cost guard (Phase 5) ---------------------------------------------------
 variable "monthly_budget_usd" {
   description = "AWS Budgets threshold for the whole account. Set BEFORE the streaming gate is ever opened, so it is already watching rather than being added after a surprise. Deliberately just above the ~$25/month the project costs awake: it should fire on a mistake, not on normal operation."

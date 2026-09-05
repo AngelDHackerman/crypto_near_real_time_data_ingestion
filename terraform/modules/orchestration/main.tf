@@ -276,10 +276,27 @@ resource "aws_iam_role_policy_attachment" "sfn_attach" {
 # -----------------------------------------------------------------------------
 # Schedule -- EventBridge -> Step Functions
 # -----------------------------------------------------------------------------
+# THE DORMANCY OF THIS RULE WAS NOT EXPRESSED IN CODE UNTIL PHASE 6, and that
+# was a real gap rather than a tidiness one. The project's standing rule is that
+# every billable path carries a Terraform gate defaulting to off; this rule
+# starts an execution that runs FIVE Glue jobs, which is the most billable thing
+# in the daily pipeline. Its `state` was simply absent, which means AWS decided
+# it and Terraform neither asserted nor read back the answer -- so "the pipeline
+# is dormant" rested on a console fact rather than on this file.
+#
+# `enabled` now says it, defaulting to false, exactly like the extractor's
+# rule_enabled. If this apply shows the rule going ENABLED -> DISABLED, that is
+# this gap closing, not a regression.
+#
+# It is deliberately NOT var.streaming_enabled. That flag gates things that BILL
+# BY EXISTING (a Kinesis shard bills from creation), so it drives `count`. A
+# disabled EventBridge rule is free, so it may exist while switched off -- the
+# same distinction Phase 5 drew between the two kinds of gate.
 resource "aws_cloudwatch_event_rule" "daily_gold_silver" {
   name                = "near-real-time-dialy-gold-silver-${var.environment}"
   schedule_expression = var.daily_schedule_cron
-  description         = "Trigger daily step functions (silver -> Gold -> Crawler)"
+  description         = "Triggers the daily Silver -> Gold pipeline, in env: ${var.environment}"
+  state               = var.daily_schedule_enabled ? "ENABLED" : "DISABLED"
 }
 
 # Permissions to allow EventBridge to StartExecution in SFN

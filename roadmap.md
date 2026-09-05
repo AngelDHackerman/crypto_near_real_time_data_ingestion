@@ -62,13 +62,21 @@ prediction. So dormancy stopped being "wait until the code is stable" and became
 standing constraint on the design.
 
 **What that constraint forces:** every billable resource gets a Terraform gate
-defaulting to off, and a gate is `count = 0`, not merely "disabled" — a disabled
-schedule is free, a created shard is not. Two flags carry this today, both `false`:
+defaulting to off, and a gate is `count = 0` when the resource bills merely by
+existing — a disabled schedule is free, a created shard is not. Three flags
+carry this today, all `false`:
 
 | Flag | Gates | Cost when open |
 |---|---|---:|
 | `eventbridge_rule_enabled` | the CMC extractor's schedule | ~$0 (CMC free tier) |
+| `sfn_daily_schedule_enabled` | the daily Silver → Gold schedule, i.e. five Glue job runs a day | Glue DPU-hours per run |
 | `streaming_enabled` | the Kinesis stream, the Firehose delivery stream, the producer's `desired_count` | ~$25/mo |
+
+The middle one is new in Phase 6, and it is a gap being closed rather than a
+feature. That rule had **no `state` in Terraform at all**: the fact that the
+daily pipeline was switched off lived in the AWS console and was asserted
+nowhere in this repository. A dormancy that only the console knows about is one
+apply away from ending.
 
 Everything that is free to exist — VPC without a NAT Gateway, security groups, IAM
 roles, ECR repositories, task definitions, log groups, Glue jobs, the state machine

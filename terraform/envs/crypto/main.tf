@@ -190,7 +190,8 @@ module "orchestration" {
   # rule form a chain, not a cycle.
   sns_topic_arn = module.observability.alerts_topic_arn
 
-  daily_schedule_cron = var.sfn_daily_schedule_cron
+  daily_schedule_cron    = var.sfn_daily_schedule_cron
+  daily_schedule_enabled = var.sfn_daily_schedule_enabled
 }
 
 # -----------------------------------------------------------------------------
