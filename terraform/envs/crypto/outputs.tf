@@ -71,6 +71,11 @@ output "glue_databases" {
   }
 }
 
+output "silver_tables" {
+  description = "The Silver tables, partition-projected rather than crawled since Phase 6. They are queryable the moment Spark writes a partition; nothing has to run first."
+  value       = module.catalog.silver_table_names
+}
+
 output "athena_workgroup" {
   description = "Athena workgroup enforcing the shared result location and SSE."
   value       = module.catalog.athena_workgroup_name
@@ -78,9 +83,10 @@ output "athena_workgroup" {
 
 # --- Processing -------------------------------------------------------------
 output "glue_jobs" {
-  description = "The four ETL jobs, in the order the state machine runs them."
+  description = "The five ETL jobs, in the order the state machine runs them. Phase 6 added the Binance stream's Silver job."
   value = [
     module.processing.silver_job_name,
+    module.processing.silver_binance_job_name,
     module.processing.gold_features_job_name,
     module.processing.gold_ohlc_job_name,
     module.processing.gold_ml_job_name,

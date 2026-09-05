@@ -171,6 +171,28 @@ variable "bronze_streaming_prefix" {
   default     = "binance"
 }
 
+# --- Phase 6 -----------------------------------------------------------------
+variable "silver_streaming_prefix" {
+  description = "Top-level prefix in silver for the Binance stream, alongside \"cmc\". Mirrors bronze_streaming_prefix one layer up. The Silver job writes trades/ and klines/ underneath it."
+  type        = string
+  default     = "binance"
+}
+
+variable "streaming_projection_start_date" {
+  description = <<-EOT
+    Lower bound of the `dt` partition projection on the two Binance Silver
+    tables (yyyy-MM-dd). The upper bound is NOW, so only this end is a setting.
+
+    It is a correctness knob, not cosmetics: a row written OUTSIDE the projected
+    range is invisible to Athena rather than an error. 2026-09-01 is the month
+    the streaming stack was built and there is no data behind it yet, so this is
+    a floor, not a claim about when data starts. Phase 7's 2017 backfill must
+    widen it in the same change that writes those rows.
+  EOT
+  type        = string
+  default     = "2026-09-01"
+}
+
 # --- Cost guard (Phase 5) ---------------------------------------------------
 variable "monthly_budget_usd" {
   description = "AWS Budgets threshold for the whole account. Set BEFORE the streaming gate is ever opened, so it is already watching rather than being added after a surprise. Deliberately just above the ~$25/month the project costs awake: it should fire on a mistake, not on normal operation."

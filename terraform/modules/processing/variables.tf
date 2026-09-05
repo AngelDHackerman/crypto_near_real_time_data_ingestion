@@ -82,3 +82,15 @@ variable "glue_scripts_dir" {
   description = "Path to the directory holding the Glue job sources, resolved by the caller so this module does not have to know the repo layout."
   type        = string
 }
+
+# --- Phase 6: the Binance streaming path through Silver -----------------------
+
+variable "bronze_streaming_prefix" {
+  description = "Top-level prefix in bronze holding the Binance stream. Input to the Binance Silver job. Its `year=/month=/day=/hour=` levels are ARRIVAL time, not event time -- see the decision block in modules/ingestion/streaming.tf."
+  type        = string
+}
+
+variable "silver_streaming_prefix" {
+  description = "Top-level prefix in silver for the Binance stream. The SOURCE, not the layer, same rule as silver_prefix. The job writes two datasets underneath it: trades/ and klines/."
+  type        = string
+}

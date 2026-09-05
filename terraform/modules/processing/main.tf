@@ -140,6 +140,70 @@ resource "aws_glue_job" "silver_job" {
 }
 
 # -----------------------------------------------------------------------------
+# Glue job: Silver Binance stream (Bronze -> Silver)  (roadmap.md, Phase 6)
+#
+# A SECOND Silver job, not a change to the first. data_sources.md section 10
+# settled that Silver stays source-separated and the join happens in Gold, and
+# the two payloads have nothing in common: one is a CoinMarketCap quotes
+# document, the other a Binance WebSocket frame. Merging them into one script
+# would mean a CoinMarketCap schema change can break the stream.
+#
+# It shares the Silver execution role above deliberately. That role's grant is
+# already "read all of bronze, write all of silver", which is exactly this
+# job's blast radius too -- a second role would be a second copy of the same
+# permissions, not a smaller one.
+#
+# NOT GATED ON streaming_enabled. A Glue job definition is free; only a job RUN
+# costs anything, and nothing runs while the state machine's schedule is
+# disabled. Same reasoning as the ECR repository and task definition in Phase 5:
+# gate what bills, not what merely exists.
+# -----------------------------------------------------------------------------
+resource "aws_glue_job" "silver_binance_job" {
+  name              = "silver-binance-${var.environment}"
+  role_arn          = aws_iam_role.glue_role.arn
+  glue_version      = "4.0"
+  number_of_workers = 2
+  worker_type       = "G.1X"
+  max_retries       = 1
+  timeout           = 60
+  execution_class   = "FLEX"
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.artifacts_bucket_id}/jobs/silver_binance_job.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--JOB_NAME"                = "silver-binance-${var.environment}"
+    "--BRONZE_BUCKET"           = var.bronze_bucket_id
+    "--BRONZE_STREAMING_PREFIX" = var.bronze_streaming_prefix
+    "--SILVER_BUCKET"           = var.silver_bucket_id
+    "--SILVER_STREAMING_PREFIX" = var.silver_streaming_prefix
+
+    "--enable-glue-datacatalog"          = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-metrics"                   = "true"
+
+    # BOOKMARKS ARE LATCHED ON HERE, not a default inherited by accident. They
+    # are what makes this job incremental, and they track OBJECTS rather than
+    # partitions -- which matters more for this job than for any other in the
+    # project, because Firehose's `year=/month=/day=/hour=` prefix is ARRIVAL
+    # time, not event time. A partition-based watermark would silently skip
+    # events that landed in an object whose path disagrees with its contents.
+    "--job-bookmark-option" = "job-bookmark-enable"
+
+    "--conf" = "spark.sql.parquet.compression.codec=snappy --conf spark.sql.shuffle.partitions=8 --conf spark.sql.sources.partitionOverwriteMode=dynamic --conf spark.sql.session.timeZone=UTC"
+
+    "--enable-s3-parquet-optimized-committer" = "true"
+
+    "--TempDir" = "s3://${var.artifacts_bucket_id}/tmp/"
+  }
+
+  tags = var.tags
+}
+
+# -----------------------------------------------------------------------------
 # IAM -- shared Gold jobs execution role
 # -----------------------------------------------------------------------------
 ###########################################
@@ -398,6 +462,15 @@ resource "aws_s3_object" "silver_glue_script" {
   key                    = "jobs/silver_glue_job.py"
   source                 = "${var.glue_scripts_dir}/silver/silver_glue_job.py"
   etag                   = filemd5("${var.glue_scripts_dir}/silver/silver_glue_job.py")
+  content_type           = "text/x-python"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_s3_object" "silver_binance_glue_script" {
+  bucket                 = var.artifacts_bucket_id
+  key                    = "jobs/silver_binance_job.py"
+  source                 = "${var.glue_scripts_dir}/silver/silver_binance_job.py"
+  etag                   = filemd5("${var.glue_scripts_dir}/silver/silver_binance_job.py")
   content_type           = "text/x-python"
   server_side_encryption = "AES256"
 }

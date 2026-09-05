@@ -1,5 +1,5 @@
 variable "project" {
-  description = "Project name. Prefixes the crawler, its role and the Athena workgroup."
+  description = "Project name. Prefixes the Athena workgroup."
   type        = string
 }
 
@@ -14,17 +14,30 @@ variable "tags" {
 }
 
 variable "silver_bucket_id" {
-  description = "Name of the silver bucket the crawler scans. Comes from module.storage."
-  type        = string
-}
-
-variable "silver_bucket_arn" {
-  description = "ARN of the silver bucket, used to scope the crawler's read policy."
+  description = "Name of the silver bucket. Composed into each Silver table's location and projection template."
   type        = string
 }
 
 variable "silver_prefix" {
-  description = "Top-level prefix inside the silver bucket -- the SOURCE, not the layer."
+  description = "Top-level prefix inside the silver bucket for the CoinMarketCap source -- the SOURCE, not the layer."
+  type        = string
+}
+
+variable "silver_streaming_prefix" {
+  description = "Top-level prefix inside the silver bucket for the Binance stream. The trades/ and klines/ datasets live underneath it."
+  type        = string
+}
+
+variable "streaming_projection_start_date" {
+  description = <<-EOT
+    Lower bound of the `dt` partition projection on the two Binance Silver
+    tables, as yyyy-MM-dd.
+
+    It is a variable rather than a literal because it is a correctness knob, not
+    a formatting one: a row written outside the projected range is INVISIBLE to
+    Athena rather than an error, so Phase 7's backfill to 2017 has to widen this
+    in the same change that writes those rows.
+  EOT
   type        = string
 }
 

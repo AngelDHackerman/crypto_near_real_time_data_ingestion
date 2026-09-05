@@ -80,7 +80,7 @@ the join design: **[`data_sources.md`](./data_sources.md)**.
 
 - **Lambda (Bronze)** → API ingestion and normalization  
 - **Glue Jobs (Silver / Gold)** → Transformation, enrichment, aggregation  
-- **Glue Crawler + Athena** → Schema discovery & SQL access  
+- **Glue Data Catalog + Athena** → Partition-projected tables, no crawler  
 - **Step Functions + EventBridge** → Orchestrated daily pipelines  
 - **Lake Formation** → Secure data catalog permissions  
 - **S3 Buckets** → Medallion-layer storage (raw → curated → analytics)
@@ -135,9 +135,14 @@ Tracked phase by phase in [`roadmap.md`](./roadmap.md). Immediately next:
   the live Binance WebSocket locally — 45 symbols over one connection, 52
   events/s batched into 5 records/s — which needs no AWS resource to exist,
   because that WebSocket is public and free.
-- **Phase 6 onward:** bronze layout, feature engineering, model training,
-  registry, serving, and the model feedback loop that is the actual goal of the
-  project.
+- **Phase 6 — Bronze layout and catalog cleanup: ✅ done.** Firehose keeps its
+  native (and free) Hive-style prefix rather than paying for dynamic
+  partitioning; the Binance stream gets its own Silver job; the last Glue
+  crawler is deleted and every Silver table is partition-projected in Terraform;
+  and the state machine lost four polling states and gained a `Catch` that can
+  finally name the step that failed.
+- **Phase 7 onward:** feature engineering, model training, registry, serving,
+  and the model feedback loop that is the actual goal of the project.
 - **The wake-up** is the last step, not an early one: flip two variables, and the
   first thing verified is a Binance tick landing as an object in S3.
 
