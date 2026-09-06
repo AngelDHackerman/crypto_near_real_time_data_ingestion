@@ -250,6 +250,22 @@ module "ml" {
   artifacts_bucket_id  = module.storage.artifacts_bucket_id
   ml_code_prefix       = var.ml_code_prefix
   ml_model_prefix      = var.ml_model_prefix
+
+  # --- serving (Phase 10) ---------------------------------------------------
+  # Gated off, and here the gate protects the APPLY before the bill: an
+  # aws_sagemaker_model needs a real artifact, so `true` with no training run
+  # behind it fails rather than costs. Serverless inference is $0 at rest.
+  serving_enabled   = var.serving_enabled
+  model_package_arn = var.model_package_arn
+
+  silver_bucket_arn    = module.storage.silver_bucket_arn
+  silver_bucket_id     = module.storage.silver_bucket_id
+  silver_klines_prefix = "${var.silver_streaming_prefix}/klines"
+
+  duckdb_layer_dir          = "${local.repo_root}/serving/inference/build/layer"
+  inference_source_dir      = "${local.repo_root}/serving/inference"
+  indicator_sql_module_path = "${local.repo_root}/glue_jobs_silver_gold/gold/indicator_sql.py"
+  inference_build_path      = "${local.repo_root}/serving/inference/build/inference_lambda.zip"
 }
 
 # -----------------------------------------------------------------------------
