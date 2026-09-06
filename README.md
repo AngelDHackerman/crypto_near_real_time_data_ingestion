@@ -111,7 +111,8 @@ the join design: **[`data_sources.md`](./data_sources.md)**.
 | 5️⃣ | ✅ [Lake Formation Checklist](./Lake_Formation_Checklist.md) | Step-by-step setup for catalog permissions and data access |
 | 6️⃣ | 🧱 [Challenges Overcome](./challenges_overcome.md) | Technical problems solved throughout the project |
 | 7️⃣ | 🔀 [Data Source Strategy](./data_sources.md) | Why Binance WebSocket **and** CoinMarketCap, the frozen 50-asset list, and the join |
-| 8️⃣ | 🗺️ [Roadmap](./roadmap.md) | Phase-by-phase plan from batch pipeline to a full ML/MLOps system |
+| 8️⃣ | 🧮 [Feature Schema](./feature_schema.md) | The versioned contract between feature engineering and model training |
+| 9️⃣ | 🗺️ [Roadmap](./roadmap.md) | Phase-by-phase plan from batch pipeline to a full ML/MLOps system |
 
 ---
 
@@ -141,8 +142,14 @@ Tracked phase by phase in [`roadmap.md`](./roadmap.md). Immediately next:
   crawler is deleted and every Silver table is partition-projected in Terraform;
   and the state machine lost four polling states and gained a `Catch` that can
   finally name the step that failed.
-- **Phase 7 onward:** feature engineering, model training, registry, serving,
-  and the model feedback loop that is the actual goal of the project.
+- **Phase 7 — Feature engineering: ✅ built.** Nine years of Binance 1-minute
+  history backfilled from the free public archive (and the job rehearsed against
+  it for real, which is how the undocumented millisecond→microsecond switch at
+  2025-01 was found). The indicator maths lives in **one SQL file** run by Spark
+  on Glue and by DuckDB in a 13-test suite that needs no cluster — see
+  [`feature_schema.md`](./feature_schema.md).
+- **Phase 8 onward:** model training, registry, serving, monitoring, and the
+  model feedback loop that is the actual goal of the project.
 - **The wake-up** is the last step, not an early one: flip two variables, and the
   first thing verified is a Binance tick landing as an object in S3.
 

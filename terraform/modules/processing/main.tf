@@ -279,6 +279,17 @@ data "aws_iam_policy_document" "glue_gold_policy" {
     resources = ["${var.artifacts_bucket_arn}/jobs/*"]
   }
 
+  # Phase 7: the feature job reads two things that are inputs rather than code
+  # -- config/tracked_assets.json for the symbol-to-cmc_id bridge, and
+  # config/indicators.sql for the maths. Granted as its own statement instead of
+  # widening the one above, so "may execute a job script" and "may read a config"
+  # stay separate permissions.
+  statement {
+    sid       = "S3ReadJobConfig"
+    actions   = ["s3:GetObject"]
+    resources = ["${var.artifacts_bucket_arn}/config/*"]
+  }
+
   statement {
     sid = "S3WriteSparkTempDir"
     actions = [
@@ -416,14 +427,30 @@ resource "aws_glue_job" "gold_ohlc" {
 # Glue Job: Gold Machine Learning Training
 #############################
 
+# PHASE 7 REPOINTED THIS JOB. It used to read gold_features_base -- daily
+# CoinMarketCap snapshots -- and label "did the price rise 2% tomorrow". It now
+# reads the 1-minute feature table and labels a cost-aware forward return. The
+# reasoning is in the script's header; the consequence here is a different input
+# prefix, two label parameters, and a size that reflects reading nine years of
+# minutes instead of a few weeks of days.
+#
+# THE NAME STILL SAYS "cmc" AND IT NO LONGER SHOULD. Gold is source-agnostic by
+# definition -- Phase 2.1 made its prefixes dataset names for exactly that
+# reason -- and this job has not read a CoinMarketCap table since this commit.
+# Renaming a Glue job is ForceNew, and Phase 6 established that the right moment
+# for a ForceNew rename is when the resource is idle and nothing is behind it,
+# which is true here. It is deliberately NOT bundled into this phase anyway:
+# Phase 6's rename was approved as its own decision with its own destroy count,
+# and quietly attaching three more destroys to an unrelated phase is how a plan
+# stops being reviewable. Carried in the backlog instead.
 resource "aws_glue_job" "gold_ml_features" {
   name              = "gold-ml-training-cmc-${var.environment}"
   role_arn          = aws_iam_role.glue_gold_base.arn
   glue_version      = "4.0"
-  number_of_workers = 2
+  number_of_workers = 10
   worker_type       = "G.1X"
   max_retries       = 1
-  timeout           = 30
+  timeout           = 240
   execution_class   = "FLEX" # flex is a cheaper option
 
   command {
@@ -445,10 +472,24 @@ resource "aws_glue_job" "gold_ml_features" {
     "--job-bookmark-option" = "job-bookmark-enable"
 
     # Business Arguments
-    "--JOB_NAME"             = "gold-ml-training-cmc-${var.environment}"
-    "--GOLD_BUCKET"          = var.gold_bucket_id
-    "--GOLD_FEATURES_PREFIX" = var.gold_features_prefix
-    "--GOLD_ML_PREFIX"       = var.gold_ml_prefix
+    "--JOB_NAME"                    = "gold-ml-training-cmc-${var.environment}"
+    "--GOLD_BUCKET"                 = var.gold_bucket_id
+    "--GOLD_MARKET_FEATURES_PREFIX" = var.gold_market_features_prefix
+    "--GOLD_ML_PREFIX"              = var.gold_ml_prefix
+    "--FEATURE_BLOCK_VERSION"       = var.feature_block_version
+
+    # The target's definition, as job arguments rather than as constants in the
+    # script. Phase 13 compares a challenger against a champion and that
+    # comparison is only meaningful across one target, so the definition has to
+    # be something a plan shows changing -- not something a commit buries.
+    "--LABEL_HORIZON_MIN"   = tostring(var.label_horizon_min)
+    "--LABEL_THRESHOLD_BPS" = tostring(var.label_threshold_bps)
+
+    # Three days, one more than the feature job's two. A row cannot be labelled
+    # until its forward window has elapsed, so the tail the previous run had to
+    # leave unlabelled is exactly what this run has to come back for.
+    "--PROCESS_MODE"      = "incremental"
+    "--PROCESS_DAYS_BACK" = "3"
   }
 
   tags = var.tags

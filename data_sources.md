@@ -617,6 +617,30 @@ Two things fall out of those twelve columns that are easy to miss:
   aggTrades is **362 MB compressed**, against 2.1 MB for the same month of
   1-minute klines. Backfill with klines.
 
+### One field-level trap the fields themselves do not show — added in Phase 7
+
+The twelve columns are the same. **Their units are not.** Binance switched the
+archive's `open_time` and `close_time` from **milliseconds to microseconds at
+2025-01**, verified by fetching `BTCUSDT-1m` either side of the boundary on
+2026-09-06:
+
+| Month | First `open_time` | |
+|---|---|---|
+| 2024-11 | `1730419200000` | 13 digits, ms |
+| 2024-12 | `1733011200000` | 13 digits, ms |
+| 2025-01 | `1735689600000000` | 16 digits, **µs** |
+| 2025-02 | `1738368000000000` | 16 digits, **µs** |
+
+The live `@kline_1m` event stayed in milliseconds throughout, so the stitch is
+still field-for-field — but only after a normalisation this section did not know
+it needed. The failure it causes is the quiet kind: microseconds read as
+milliseconds place January 2025 in the year 56,000, and a partition filter then
+*hides* those rows rather than reporting them.
+
+The Silver job decides the unit **from the value's magnitude, not from the
+month** — a 1-minute open time in milliseconds is 13 digits until the year 2286
+— so a month re-published later in the new unit cannot break it.
+
 ### What the backfill does NOT give
 
 - **No tick-level detail.** Sub-minute features exist only from Phase 5 forward.

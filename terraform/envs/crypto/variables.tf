@@ -224,3 +224,76 @@ variable "sns_email" {
   description = "Address subscribed to the pipeline failure alerts topic."
   type        = string
 }
+
+# --- Phase 7 -----------------------------------------------------------------
+# Every variable below carries a default, on purpose. terraform.tfvars is
+# gitignored and exists on one machine (a still-open backlog item), so a new
+# REQUIRED variable is a change that breaks any apply from anywhere else with an
+# error that reads like a bug. Defaults here mean Phase 7 applies from a clean
+# checkout; anything genuinely environment-specific still belongs in tfvars.
+
+variable "bronze_backfill_prefix" {
+  description = <<-EOT
+    Top-level prefix in bronze for the downloaded Binance kline archive.
+
+    A SIBLING of `binance/`, not a child, and the distinction is load-bearing:
+    the streaming Silver job reads `binance/` recursively as newline-delimited
+    JSON, so a CSV underneath it would be parsed as JSON and produce a frame of
+    nulls rather than an error.
+  EOT
+  type        = string
+  default     = "binance_archive"
+}
+
+variable "backfill_manifest_prefix" {
+  description = "Prefix in the artifacts bucket for backfill run manifests -- every file written, its published SHA-256, its row count and its detected timestamp unit. Artifacts and not bronze: a manifest is not lake data, and it would break partition discovery under the archive prefix."
+  type        = string
+  default     = "backfill/manifests"
+}
+
+variable "gold_market_features_prefix" {
+  description = "Dataset prefix for the 1-minute feature table. Gold prefixes are dataset names, never source names -- Gold is the join."
+  type        = string
+  default     = "gold_market_features_1m"
+}
+
+variable "backfill_projection_start_date" {
+  description = <<-EOT
+    Lower bound of the `dt` projection on every table carrying backfilled
+    history: the Binance Silver klines table and the two 1-minute Gold tables.
+
+    2017-07 is Binance's own opening month, so this is the earliest a row can
+    exist rather than a date someone picked. It is separate from
+    streaming_projection_start_date because that one bounds tables the stream
+    alone writes, and widening those to 2017 would make Athena enumerate nine
+    years of partitions that cannot exist.
+  EOT
+  type        = string
+  default     = "2017-07-01"
+}
+
+variable "feature_block_version" {
+  description = "Stamped on every row of the feature table. Phase 8 records a baseline metric, and a baseline measured against a feature definition that later changed is not a baseline -- so changing indicators.sql means changing this in the same commit."
+  type        = string
+  default     = "v1"
+}
+
+variable "label_horizon_min" {
+  description = "Forward horizon of the training label, in minutes. Also the sampling stride, so that consecutive retained rows have disjoint label windows."
+  type        = number
+  default     = 60
+}
+
+variable "label_threshold_bps" {
+  description = <<-EOT
+    Basis points the forward return must exceed for a positive label.
+
+    20 bps is a round-trip Binance taker fee (10 bps a side) before slippage.
+    Labelling "went up" instead would mark a great many moves that would have
+    lost money, and a model that predicts those perfectly is worthless. This
+    is what makes the target mean something; it does not make the output
+    actionable -- the project's stated goal still holds.
+  EOT
+  type        = number
+  default     = 20
+}

@@ -50,3 +50,54 @@ variable "athena_results_prefix" {
   description = "Prefix inside the artifacts bucket for Athena query results."
   type        = string
 }
+
+# --- Phase 7 -----------------------------------------------------------------
+variable "backfill_projection_start_date" {
+  description = <<-EOT
+    Lower bound of the `dt` projection on every table that carries backfilled
+    history: the Binance klines Silver table and the Gold tables built from it.
+
+    Separate from streaming_projection_start_date on purpose. That one bounds
+    tables only the live stream writes, and widening it to 2017 would make
+    Athena enumerate nine years of partitions that cannot exist. This one has to
+    reach the archive's own floor -- Binance opened in July 2017 and publishes
+    nothing earlier (data_sources.md section 11) -- because a row written
+    outside a projected range is invisible rather than an error.
+  EOT
+  type        = string
+}
+
+variable "gold_bucket_id" {
+  description = "Name of the gold bucket. Composed into each Gold table's location and projection template."
+  type        = string
+}
+
+variable "gold_features_prefix" {
+  description = "Dataset prefix for the CoinMarketCap market-context table."
+  type        = string
+}
+
+variable "gold_ohlc_prefix" {
+  description = "Dataset prefix for the OHLC aggregates."
+  type        = string
+}
+
+variable "gold_market_features_prefix" {
+  description = "Dataset prefix for the 1-minute feature table Phase 8 trains on."
+  type        = string
+}
+
+variable "gold_ml_prefix" {
+  description = "Dataset prefix for the labelled training set."
+  type        = string
+}
+
+variable "tracked_asset_ids" {
+  description = "The frozen CoinMarketCap ids, read from config/tracked_assets.json by the root module. Rendered into the asset_id enum projections so the catalog cannot disagree with the universe -- the hand-written DDL this replaced still listed the pre-Phase-4 eleven."
+  type        = list(number)
+}
+
+variable "streamed_symbols" {
+  description = "The Binance pairs with a live stream, from the same file. Rendered into the symbol enum projection on the two 1-minute Gold tables."
+  type        = list(string)
+}
