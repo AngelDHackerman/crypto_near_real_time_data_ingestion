@@ -340,3 +340,22 @@ variable "model_package_arn" {
   type        = string
   default     = ""
 }
+
+# --- Phase 11 ----------------------------------------------------------------
+variable "slack_enabled" {
+  description = <<-EOT
+    Whether model signals are delivered to Slack.
+
+    A THIRD kind of gate, and worth distinguishing from the other two in tfvars:
+    streaming_enabled guards a recurring bill, serving_enabled guards an apply
+    that would fail, and this one guards a CREDENTIAL. The Lambda and the secret
+    are free; what does not exist yet is the webhook URL.
+
+    Setting it true before the secret holds a real webhook creates a
+    subscription that fails on every message, which surfaces as a Lambda error
+    rather than as "nobody pasted the value". So: set the secret first, by hand,
+    then flip this.
+  EOT
+  type        = bool
+  default     = false
+}

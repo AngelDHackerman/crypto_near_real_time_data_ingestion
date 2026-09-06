@@ -84,6 +84,43 @@ resource "aws_sagemaker_endpoint_configuration" "signal" {
     }
   }
 
+  # ---------------------------------------------------------------------------
+  # Data capture -- the outcome of Phase 11's Model Monitor evaluation
+  #
+  # SageMaker Model Monitor was evaluated and DECLINED (roadmap.md, Phase 11):
+  # it needs a scheduled Processing job, ~$7/month at the smallest useful size,
+  # to watch an endpoint with one caller -- and what it detects is INPUT DRIFT,
+  # while Phase 13 builds something strictly stronger for this project: whether
+  # the predictions were actually RIGHT, measured against realised prices.
+  #
+  # Data capture is the half worth keeping, and it is nearly free: S3 puts and
+  # storage, no compute. It writes every request and response to S3, which is
+  # three things at once --
+  #
+  #   1. Phase 13's first DoD, "signals persisted with timestamp and
+  #      prediction", satisfied by the platform instead of by a table this
+  #      project would otherwise have to write and maintain;
+  #   2. the ground truth job's input: what was predicted, and when;
+  #   3. the option on Model Monitor kept open. Turning it on later needs
+  #      history, and history cannot be collected retroactively -- which is the
+  #      whole reason this is here now rather than in Phase 13.
+  #
+  # 100%, not a sample. At this volume a sample saves nothing and would make the
+  # feedback loop's denominator an estimate.
+  # ---------------------------------------------------------------------------
+  data_capture_config {
+    enable_capture              = true
+    initial_sampling_percentage = 100
+    destination_s3_uri          = "s3://${var.artifacts_bucket_id}/${var.ml_capture_prefix}"
+
+    capture_options {
+      capture_mode = "Input"
+    }
+    capture_options {
+      capture_mode = "Output"
+    }
+  }
+
   tags = var.tags
 }
 

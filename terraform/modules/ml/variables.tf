@@ -137,3 +137,9 @@ variable "inference_build_path" {
   type        = string
   default     = ""
 }
+
+variable "ml_capture_prefix" {
+  description = "Prefix in artifacts where the endpoint captures every request and response. It is Phase 13's prediction log, obtained from the platform rather than built -- and the reason it exists in Phase 11 is that history cannot be collected retroactively."
+  type        = string
+  default     = "ml/capture"
+}

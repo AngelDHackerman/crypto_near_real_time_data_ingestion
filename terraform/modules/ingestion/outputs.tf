@@ -49,3 +49,17 @@ output "streaming_enabled" {
   description = "Whether the billable streaming resources exist. False while dormant."
   value       = var.streaming_enabled
 }
+
+# --- Phase 11 ----------------------------------------------------------------
+# Alarm targets. Exposed so modules/observability names them from the resource
+# that owns them, rather than from a second copy in tfvars -- the same rule
+# Phase 2.1 applied to bucket names.
+output "producer_cluster_name" {
+  description = "ECS cluster running the producer, watched by the liveness alarm."
+  value       = aws_ecs_cluster.producer.name
+}
+
+output "firehose_stream_name" {
+  description = "Firehose delivery stream, watched for delivery freshness. Empty string while streaming_enabled is false, because the stream does not exist -- the alarm that reads it is gated on the same flag."
+  value       = var.streaming_enabled ? aws_kinesis_firehose_delivery_stream.binance_to_bronze[0].name : ""
+}

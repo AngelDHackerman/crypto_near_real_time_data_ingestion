@@ -148,8 +148,16 @@ Tracked phase by phase in [`roadmap.md`](./roadmap.md). Immediately next:
   2025-01 was found). The indicator maths lives in **one SQL file** run by Spark
   on Glue and by DuckDB in a 13-test suite that needs no cluster — see
   [`feature_schema.md`](./feature_schema.md).
-- **Phase 8 onward:** model training, registry, serving, monitoring, and the
-  model feedback loop that is the actual goal of the project.
+- **Phases 8–11 — the ML half: ✅ built, and switched off.** XGBoost training on
+  a pinned managed container, a model registry whose *promotion rule* is a
+  tested pure function, serverless inference that recomputes features from the
+  **same `indicators.sql`** the batch pipeline runs (so there is no
+  training/serving skew to drift into), and alerting split into ops-by-email and
+  signals-by-Slack. Phase 11 also fixed an SNS topic policy under which **every
+  CloudWatch alarm would have failed silently**.
+- **Phase 12 — containerization & CI/CD:** the one phase deliberately not
+  delegated. It also closes the wake-up precondition: the producer image.
+- **Phase 13 — the model feedback loop**, the actual goal of the project.
 - **The wake-up** is the last step, not an early one: flip two variables, and the
   first thing verified is a Binance tick landing as an object in S3.
 

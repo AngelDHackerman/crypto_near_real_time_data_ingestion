@@ -111,6 +111,17 @@ data "aws_iam_policy_document" "sagemaker_execution" {
     resources = ["${var.artifacts_bucket_arn}/${var.ml_model_prefix}/*"]
   }
 
+  # Phase 11: the endpoint captures every request and response here. It is
+  # Phase 13's prediction log, kept by the platform rather than built -- and it
+  # is granted to the SAME role because a SageMaker endpoint writes captures as
+  # its execution role. PutObject only: capture is append-only by nature, and a
+  # grant to delete a prediction record is a grant to edit history.
+  statement {
+    sid       = "S3WriteDataCapture"
+    actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
+    resources = ["${var.artifacts_bucket_arn}/${var.ml_capture_prefix}/*"]
+  }
+
   # No s3:DeleteObject anywhere. A training job has no reason to remove an
   # artifact, and the bucket's versioning plus lifecycle handles expiry -- so
   # the permission would exist only for an accident or an incident.
