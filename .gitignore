@@ -206,6 +206,12 @@ pyrightconfig.json
 *.tfstate
 *.tfstate.*
 
+# Saved plan files. A .tfplan is not a diff, it is a snapshot: it embeds the
+# resolved value of every variable, which for this project means the contents of
+# a gitignored terraform.tfvars. Committing one would leak the file two lines
+# below this on purpose. Added in Phase 6, whose runbook uses `plan -out`.
+*.tfplan
+
 # Crash log files
 crash.log
 crash.*.log

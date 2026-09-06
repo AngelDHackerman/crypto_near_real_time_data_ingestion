@@ -110,7 +110,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 3 | Terraform refactor into modules | ✅ Done | `phase-3/terraform-modules` | 69 `moved {}` blocks, **0 destroyed** on the structural apply. 6 modules + `envs/crypto/`. Plan clean |
 | 4 | Data source strategy (Binance WS + CMC) | ✅ Done | `phase-4/data-source-strategy` | 50 ids frozen in `config/tracked_assets.json`, 45 streamed + 5 CMC-only. CMC quota 86% → 7.3%. No infra touched |
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ✅ Done | `phase-5/streaming-ingestion` [#5] | **Does NOT wake the project.** 19 added, 2 changed, **0 destroyed**, **$0/month** — no Kinesis or Firehose exists behind `streaming_enabled = false`. Producer verified against live Binance locally. Tick-to-S3 check deferred to the wake-up |
-| 6 | Bronze layout, Silver adaptation, catalog cleanup | ✅ Done | `phase-6/bronze-layout-silver-projection` | Crawler retired, Silver projected in Terraform, 4 polling states deleted, `Catch` added, 2 lying names fixed. **Plan is NOT 0-destroyed** — the renames are ForceNew, and that was approved |
+| 6 | Bronze layout, Silver adaptation, catalog cleanup | ✅ Done | `phase-6/bronze-layout-silver-projection` | **10 added, 4 changed, 10 destroyed**, plan clean afterwards. Not 0-destroyed on purpose: 5 of the destroys are the approved rename's ForceNew blast radius, 5 are the crawler and its IAM. Project still dormant — three rules `DISABLED`, no Kinesis stream |
 | 7 | Feature engineering | ⬜ Not started | | Extends existing Gold jobs |
 | 8 | Model training | ⬜ Not started | | Serverless, no VPC |
 | 9 | Model registry | ⬜ Not started | | |
@@ -1230,12 +1230,21 @@ expected, not drift.**
       "before" to compare against. The check itself is written down in
       `sql/athena_verification_silver_phase6.sql` and runs at the wake-up.
 
-**Not verified against AWS.** This phase was written with no credentials
-available in the working shell, so nothing was applied and no `terraform plan`
-was run. What *was* checked: `terraform fmt -check -recursive` and
-`terraform validate` both pass, the state machine JSON was rendered from the
-real `locals` block and checked for unreachable states and dangling
-transitions, and the new Glue job compiles. The apply is Angel's.
+**Applied 2026-09-06: 10 added, 4 changed, 10 destroyed**, and
+`terraform plan -detailed-exitcode` returns 0 afterwards.
+
+It was *written* with no credentials reachable in the working shell, so the
+static checks carried the weight until Angel ran it: `fmt -check -recursive`,
+`validate`, a reachability and dangling-transition check over the state machine
+JSON rendered from the real `locals` block, and a compile of the new Glue job.
+Every one of those held; the apply matched the predicted categories exactly.
+
+Verified after the apply, in this order: the three Silver tables exist with
+`projection.enabled = true`, `GetCrawler` returns `EntityNotFoundException`, the
+deployed state machine definition contains `NotifyFailure` and
+`SilverBinanceJob` and none of the three crawler states, and — the one that
+matters most — **the project is still asleep**: all three EventBridge rules
+`DISABLED`, `list-streams` empty, producer at `desired_count = 0`.
 
 **One thing to expect at the wake-up.** The first scheduled run after
 `streaming_enabled` is flipped can fail on `SilverBinanceJob` with a
@@ -1244,11 +1253,14 @@ so `bronze/binance/` has never been written. It is a one-off; re-run the
 execution. The job deliberately does not swallow it: a `try/except` there would
 also hide a genuine unreadable-Bronze failure on every day after the first.
 
-**One-time step before the first apply.** The deleted crawler wrote its table
-into `crypto_silver_db` with the prefix `silver_`. Terraform will not adopt an
-existing table, so an orphan surviving from before the lake was emptied makes
-the first apply fail with `AlreadyExistsException`. Drop it first — it is a
-schema with no data behind it:
+**One-time step before the first apply — needed, and done.** The deleted
+crawler had left its table in `crypto_silver_db` with the prefix `silver_`.
+Terraform will not adopt an existing table, so it had to be dropped by hand
+first or the apply would have failed with `AlreadyExistsException` — which the
+`plan` does not catch, because the collision only exists at create time. It was
+a schema with no data behind it (Phase 2.1 deleted the lake), so this cost
+nothing. Kept here because a future rebuild from scratch will not hit it, and
+someone re-reading this should know why the step existed:
 
 ```bash
 aws glue get-tables --database-name crypto_silver_db --query 'TableList[].Name'
@@ -1598,7 +1610,7 @@ phase. Each is tagged with where it gets resolved.
 | Gold's tables are hand-run DDL; Silver's are Terraform | Phase 7 | Phase 6 made the three Silver tables `aws_glue_catalog_table` resources rather than adding to `sql/athena_projections_*.sql`, because replacing an automated crawler with a manual DDL step would have been a regression in automation. That leaves two mechanisms in one catalog. Phase 7 already rewrites the Gold jobs, so it is the cheap moment to move their three `.sql` files across |
 | Widen `streaming_projection_start_date` when the backfill lands | Phase 7 | Defaults to `2026-09-01`. A row written OUTSIDE a projected `dt` range is INVISIBLE to Athena rather than an error, so the 2017 backfill must widen this in the SAME change that writes those rows, or it will look like the backfill silently did nothing |
 | The daily trigger may be the wrong grain over a stream | Phase 7 | Phase 6 left the state machine daily and added `SilverBinanceJob` to the chain. A stream feeding a once-a-day batch is a cadence question Phase 7 inherits, not a defect |
-| Phase 6 was never applied or planned against AWS | at the wake-up | No credentials were reachable from the working shell when Phase 6 was written. `fmt`, `validate`, an ASL reachability check and a Python compile all pass; a real `plan` does not exist yet. Expect the rename to show as a replacement |
+| Phase 6 was written without AWS credentials | Phase 6 ✅ | Static checks only while writing it — `fmt`, `validate`, an ASL reachability check, a Python compile. Angel applied it on 2026-09-06 and the plan matched the predicted categories: 10 added, 4 changed, 10 destroyed, clean plan afterwards. The orphan Silver table did exist and had to be dropped first |
 | SNS topic policy blocks `cloudwatch.amazonaws.com` | Phase 11 | Alarms would fail silently |
 | Split SNS into ops vs signals topics | Phase 11 | |
 | Review the email subscription channel | Phase 11 | Slack webhook demos better |
