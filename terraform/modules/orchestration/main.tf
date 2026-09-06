@@ -68,7 +68,8 @@ locals {
       { name = "SilverCmcJob", job = var.silver_job_name, next = "SilverBinanceJob" },
       { name = "SilverBinanceJob", job = var.silver_binance_job_name, next = "GoldFeaturesBaseJob" },
       { name = "GoldFeaturesBaseJob", job = var.gold_features_job_name, next = "GoldOHLCJob" },
-      { name = "GoldOHLCJob", job = var.gold_ohlc_job_name, next = "GoldMLTrainingJob" },
+      { name = "GoldOHLCJob", job = var.gold_ohlc_job_name, next = "GoldMarketFeaturesJob" },
+      { name = "GoldMarketFeaturesJob", job = var.gold_market_features_job_name, next = "GoldMLTrainingJob" },
       { name = "GoldMLTrainingJob", job = var.gold_ml_job_name, next = "Success" },
       ] : step.name => {
       Type       = "Task"
@@ -92,13 +93,34 @@ locals {
     StartAt = "SilverCmcJob"
     States = merge(local.glue_step, {
 
-      # SilverBinanceJob sits in the chain rather than beside it, even though no
-      # Gold job reads its output yet. Two reasons: Phase 7's feature work reads
-      # exactly this table, so the dependency is arriving, and a failure in a
-      # Silver job should stop the run and alert rather than let Gold quietly
-      # build on a layer that did not refresh. Phase 7 revisits the cadence of
-      # this machine anyway -- a daily trigger over a live stream is the open
-      # question it inherits.
+      # SilverBinanceJob sits in the chain rather than beside it. Phase 6 put it
+      # there before anything read its output, on the grounds that Phase 7's
+      # feature work would; GoldMarketFeaturesJob below is that reader, so the
+      # dependency is now real rather than anticipated.
+      #
+      # THE CADENCE QUESTION PHASE 6 LEFT OPEN, ANSWERED: THE MACHINE STAYS
+      # DAILY. "A stream feeding a once-a-day batch" sounds like a mismatch, and
+      # it is worth saying why it is not one here.
+      #
+      #   - Nothing downstream of this machine is latency-sensitive. Its output
+      #     is a TRAINING SET. A model retrained daily at most cannot use a
+      #     training set rebuilt hourly, and Phase 13's degradation loop measures
+      #     over rolling windows of predictions, not over the freshest bar.
+      #
+      #   - The serving path does not read these tables at all. Phase 10
+      #     computes features at request time from the last 1440 minutes -- the
+      #     same indicators.sql, a different engine -- so inference freshness is
+      #     bounded by Firehose's five-minute buffer, not by this schedule.
+      #     Making the batch hourly would not make a single prediction fresher.
+      #
+      #   - It would cost 24x for that. Five Glue jobs per execution, and Glue
+      #     bills a one-minute minimum per run per worker, so the fixed overhead
+      #     alone multiplies. FLEX makes each run cheap; it does not make 24 of
+      #     them cheap.
+      #
+      # The honest summary is that the grain of the DATA is one minute and the
+      # grain of this PIPELINE is one day, and those are allowed to differ
+      # because nothing between them needs the difference closed.
 
       NotifyFailure = {
         Type     = "Task"
@@ -205,8 +227,16 @@ data "aws_iam_policy_document" "sfn_policy" {
       "${local.glue_arn_prefix}:job/${var.silver_binance_job_name}",
       "${local.glue_arn_prefix}:job/${var.gold_features_job_name}",
       "${local.glue_arn_prefix}:job/${var.gold_ohlc_job_name}",
+      "${local.glue_arn_prefix}:job/${var.gold_market_features_job_name}",
       "${local.glue_arn_prefix}:job/${var.gold_ml_job_name}",
     ]
+
+    # NOT LISTED, and that is the gate: the backfill job and the Silver archive
+    # job. Both are one-time loads started deliberately by a human, and neither
+    # belongs in a nightly execution -- the backfill would re-walk 3,135 URLs
+    # every night to skip them all, and the Silver archive job would rewrite
+    # nine years of partitions. Leaving them out of this role means the state
+    # machine cannot start them even if someone adds a state that tries.
   }
 
   # Phase 6 deleted the "Crawler" statement -- glue:StartCrawler and

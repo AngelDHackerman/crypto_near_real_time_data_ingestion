@@ -1,3 +1,17 @@
+-- ============================================================================
+-- SUPERSEDED BY TERRAFORM IN PHASE 7 -- DO NOT RUN THIS FILE.
+--
+-- These tables are now aws_glue_catalog_table resources in
+-- terraform/modules/catalog/gold_tables.tf. Kept as a record of the manual era,
+-- and because the drift found while migrating is worth being able to point at:
+-- the OHLC projection here still pins asset_id to the pre-Phase-4 list of
+-- ELEVEN ids, so 40 of the 50 tracked assets would have been INVISIBLE to
+-- Athena rather than missing with an error.
+--
+-- That is the failure mode partition projection has, and it is the argument for
+-- generating these from config/tracked_assets.json instead of typing them.
+-- ============================================================================
+
 CREATE EXTERNAL TABLE crypto_gold_db.gold_ml_training(
   symbol               string,
   name                 string,

@@ -36,8 +36,12 @@ WHAT IT WRITES: TWO TABLES, NOT ONE
     them into one table would mean either nulls in two thirds of every row or a
     fabricated join key:
 
-        silver/binance/trades/dt=YYYY-MM-DD/hour=HH/   -- one row per aggTrade
-        silver/binance/klines/dt=YYYY-MM-DD/hour=HH/   -- one row per 1m bar
+        silver/binance/trades/dt=YYYY-MM-DD/hour=HH/                  -- one aggTrade
+        silver/binance/klines/source=stream/dt=YYYY-MM-DD/hour=HH/    -- one 1m bar
+
+    The klines dataset grew a `source=` level in Phase 7, when the 2017 archive
+    backfill became its second writer. See silver_binance_backfill_job.py for
+    why a plain column could not carry that distinction safely.
 
     Partitioned on EVENT time, `dt` as a date so Athena can project it with a
     single `date` range instead of the four-way integer cross-product the CMC
@@ -225,22 +229,36 @@ events = events.withColumn(
 ).withColumn("ingested_at_utc", ms_to_ts(F.col("_ingested_at")))
 
 
-def write_partitioned(df, prefix: str) -> None:
+def write_partitioned(df, prefix: str, partition_by=("dt", "hour")) -> None:
     """Write one Silver dataset, partitioned on EVENT time.
 
     dt/hour are derived from event_time_utc, never from the Bronze path. That
     is the whole point of the arrival-vs-event distinction at the top of this
     file: this is where the arrival-time bucketing Firehose imposed is undone.
+
+    `partition_by` exists because Phase 7 gave the klines dataset a SECOND
+    writer -- the 2017 archive backfill -- and two writers keyed on the same
+    (dt, hour) cannot both be idempotent. klines is therefore partitioned
+    `source=/dt=/hour=` so each writer owns a subtree; trades has one writer and
+    keeps the flat layout. The reasoning is written out once, in
+    silver_binance_backfill_job.py.
+
+    The mode stays `append` HERE regardless. This job is incremental via
+    bookmarks: a run carries whatever arrived since the last one, which is
+    routinely more rows for an hour a previous run already wrote. Dynamic
+    overwrite would delete that earlier run's rows for the hour. The backfill
+    can use overwrite precisely because it is not incremental -- it re-derives a
+    whole month from an immutable file.
     """
     out = (
         df.withColumn("dt", F.to_date("event_time_utc"))
         .withColumn("hour", F.date_format("event_time_utc", "HH"))
-        .repartition("dt", "hour")
+        .repartition(*partition_by)
     )
     (
         out.write.mode("append")
         .option("maxRecordsPerFile", 2_000_000)
-        .partitionBy("dt", "hour")
+        .partitionBy(*partition_by)
         .parquet(f"{silver_root}{prefix}/")
     )
 
@@ -357,6 +375,6 @@ klines_dedup = (
     .drop("_rn")
 )
 
-write_partitioned(klines_dedup, "klines")
+write_partitioned(klines_dedup, "klines", partition_by=("source", "dt", "hour"))
 
 job.commit()

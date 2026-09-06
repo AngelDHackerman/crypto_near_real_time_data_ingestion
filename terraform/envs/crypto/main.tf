@@ -127,6 +127,20 @@ module "catalog" {
   # the Silver crawler's read policy, and the crawler is gone.
   streaming_projection_start_date = var.streaming_projection_start_date
 
+  # Phase 7: the Gold catalog moved out of the hand-run sql/ files and into this
+  # module, and the backfill needs its own, much earlier projection floor. The
+  # two lists below are what stops the enum projections from drifting away from
+  # the universe -- the DDL they replace still named the pre-Phase-4 eleven ids.
+  backfill_projection_start_date = var.backfill_projection_start_date
+  tracked_asset_ids              = local.tracked_asset_ids
+  streamed_symbols               = local.streamed_symbols
+
+  gold_bucket_id              = module.storage.gold_bucket_id
+  gold_features_prefix        = var.gold_features_prefix
+  gold_ohlc_prefix            = var.gold_ohlc_prefix
+  gold_market_features_prefix = var.gold_market_features_prefix
+  gold_ml_prefix              = var.gold_ml_prefix
+
   artifacts_bucket_id   = module.storage.artifacts_bucket_id
   athena_results_prefix = var.athena_results_prefix
 }
@@ -164,6 +178,20 @@ module "processing" {
   artifacts_bucket_id  = module.storage.artifacts_bucket_id
   artifacts_bucket_arn = module.storage.artifacts_bucket_arn
 
+  # Phase 7 -- the backfill and the feature layer.
+  bronze_backfill_prefix      = var.bronze_backfill_prefix
+  backfill_manifest_prefix    = var.backfill_manifest_prefix
+  gold_market_features_prefix = var.gold_market_features_prefix
+  feature_block_version       = var.feature_block_version
+  label_horizon_min           = var.label_horizon_min
+  label_threshold_bps         = var.label_threshold_bps
+
+  # The same file this root module reads for the id and symbol lists above,
+  # uploaded so the jobs read it too. One owner per fact, across the process
+  # boundary: Terraform decides which partitions Athena projects from this file,
+  # and the backfill decides which months to download from the same bytes.
+  tracked_assets_file = "${local.repo_root}/config/tracked_assets.json"
+
   glue_scripts_dir = "${local.repo_root}/glue_jobs_silver_gold"
 }
 
@@ -182,6 +210,12 @@ module "orchestration" {
   gold_features_job_name  = module.processing.gold_features_job_name
   gold_ohlc_job_name      = module.processing.gold_ohlc_job_name
   gold_ml_job_name        = module.processing.gold_ml_job_name
+
+  # Phase 7. Deliberately absent: the backfill job and the Silver archive job.
+  # Both are one-time loads, and the Step Functions role is scoped by ARN, so
+  # leaving them out is what makes "the nightly run cannot start them" true
+  # rather than merely intended.
+  gold_market_features_job_name = module.processing.gold_market_features_job_name
 
   # Phase 6 dropped silver_crawler_name and added this. The two modules now
   # reference each other -- orchestration reads the topic ARN, observability

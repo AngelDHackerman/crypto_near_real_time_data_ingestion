@@ -36,3 +36,19 @@ output "silver_binance_job_name" {
   description = "Name of the Binance stream Silver Glue job (roadmap.md, Phase 6)."
   value       = aws_glue_job.silver_binance_job.name
 }
+
+# --- Phase 7 -----------------------------------------------------------------
+output "backfill_job_name" {
+  description = "Python shell job that downloads the Binance kline archive into Bronze. Deliberately absent from the state machine: it is started once, by hand, like the wake-up flags."
+  value       = aws_glue_job.backfill_binance_klines.name
+}
+
+output "silver_binance_backfill_job_name" {
+  description = "Spark job that normalises the downloaded archive into the Silver klines table under source=backfill."
+  value       = aws_glue_job.silver_binance_backfill.name
+}
+
+output "gold_market_features_job_name" {
+  description = "Spark job that builds the 1-minute feature table Phase 8 trains on."
+  value       = aws_glue_job.gold_market_features.name
+}

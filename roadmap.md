@@ -111,7 +111,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 4 | Data source strategy (Binance WS + CMC) | ✅ Done | `phase-4/data-source-strategy` | 50 ids frozen in `config/tracked_assets.json`, 45 streamed + 5 CMC-only. CMC quota 86% → 7.3%. No infra touched |
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ✅ Done | `phase-5/streaming-ingestion` [#5] | **Does NOT wake the project.** 19 added, 2 changed, **0 destroyed**, **$0/month** — no Kinesis or Firehose exists behind `streaming_enabled = false`. Producer verified against live Binance locally. Tick-to-S3 check deferred to the wake-up |
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ✅ Done | `phase-6/bronze-layout-silver-projection` | **10 added, 4 changed, 10 destroyed**, plan clean afterwards. Not 0-destroyed on purpose: 5 of the destroys are the approved rename's ForceNew blast radius, 5 are the crawler and its IAM. Project still dormant — three rules `DISABLED`, no Kinesis stream |
-| 7 | Feature engineering | ⬜ Not started | | Extends existing Gold jobs |
+| 7 | Feature engineering | ✅ Done | `phase-7/feature-engineering` | **16 added, 8 changed, 0 destroyed**. Backfill job rehearsed against the live archive and real S3; indicator maths is one SQL file verified by 13 tests on DuckDB, no Spark needed. `source` promoted to a partition key. Gold catalog migrated out of hand-run DDL, which found an 11-id projection hiding 40 assets. Full 4.4 GB load and the overlap check wait for the apply and the wake-up |
 | 8 | Model training | ⬜ Not started | | Serverless, no VPC |
 | 9 | Model registry | ⬜ Not started | | |
 | 10 | Serving / inference | ⬜ Not started | | |
@@ -1280,39 +1280,227 @@ aws glue delete-table --database-name crypto_silver_db --name <orphan>
 
 ---
 
-## Phase 7 — Feature engineering
+## Phase 7 — Feature engineering ✅
 
-**Goal:** compute the technical indicators the model will train on.
+**Goal:** compute the technical indicators the model will train on — and first,
+give it something to compute them over.
 
-**Scope**
+**Applied:** *pending Angel's apply.* Plan is **16 added, 8 changed, 0
+destroyed**, verified against the live account on 2026-09-06. The project stays
+dormant: both EventBridge rules re-read from AWS after planning are still
+`DISABLED` and `kinesis list-streams` is empty.
 
-- **Backfill the history first, then compute features over the whole span.**
-  Download the free Binance kline archive (`data_sources.md` §11) into
-  `bronze/binance/`, stitching the pre-rename aliases from
-  `config/tracked_assets.json`, and **resample the streaming data to the same
-  1-minute grain in Gold** so old and new are one continuous table. The archive
-  and the live `@kline_1m` event are the same twelve fields from the same
-  exchange, so this is a concatenation, not an approximation. Carry
-  `source ∈ {backfill, stream}` as a column and validate the two against each
-  other on the overlap window.
-- Extend the existing Gold jobs (`gold_features_base`, `gold_ohlc`,
-  `gold_ml_training`) with RSI, moving averages, volume-derived features.
-- **Layer the feature schema by data availability.** A core block computable from
-  1-minute OHLCV alone spans 2017 to now; tick-derived features only start when the
-  stream does. One flat schema would be mostly null in its most interesting columns.
-- Orchestrate at the right cadence — with streaming data, the daily trigger may
-  no longer be the right grain.
-- Define and freeze the output feature schema that Phase 8 will consume.
+---
+
+### The backfill, and three traps that were verified rather than assumed
+
+`data_sources.md` §11 established that Binance publishes its entire 1-minute
+history free at `data.binance.vision`. Building the job that fetches it turned
+up three things the document did not know, each found by fetching real files:
+
+**1. The archive changes its timestamp unit half-way through, and nothing says
+so.** Files up to and including **2024-12 are milliseconds**; from **2025-01
+they are microseconds**. Fetched either side of the boundary:
+
+```
+2024-11  1730419200000     (13 digits, ms)
+2024-12  1733011200000     (13 digits, ms)
+2025-01  1735689600000000  (16 digits, us)
+2025-02  1738368000000000  (16 digits, us)
+```
+
+§11 says the archive and the live `@kline_1m` event are "the same twelve
+fields". That is true of the fields and **not of their units**. Reading a
+microsecond value as milliseconds does not error — it places January 2025 in the
+year 56,000, which a partition filter then *hides* rather than reports. Bronze
+keeps the file as published; the unit is detected **from the magnitude, not from
+the month**, in the Silver job, so a re-published old file cannot break it.
+
+**2. The checksum covers the ZIP, not the CSV.** So the digest is verified
+*before* extraction, and what lands in Bronze is the extracted CSV — Spark
+cannot read a member of a ZIP, and a Bronze object no reader can open is an
+archive, not raw data. Verified: the published digest for
+`BTCUSDT-1m-2018-01.zip` matches the locally computed one.
+
+**3. `history_months` in the config is a measurement, not a boundary.** It was
+counted on 2026-08-27 and the archive grows monthly, so the job walks from
+`binance_history_from` to the current month and treats a **404 as "that month
+does not exist"** rather than as an error. A delisting looks exactly like that
+from here — `XMRUSDT` simply stops in 2024-02 — so the walk records the gap
+instead of failing on it. A 503 is *not* collapsed into the same bucket: a bad
+afternoon at the CDN must never masquerade as a hole in Binance's history.
+
+**The archive gets its own top-level Bronze prefix, `binance_archive/`, and that
+is a correctness constraint rather than tidiness.** The streaming Silver job
+reads `binance/` **recursively as newline-delimited JSON**; a CSV placed
+underneath it would be handed to a JSON parser, which does not fail loudly so
+much as it yields a frame of nulls.
+
+**Rehearsed for real, not just compiled.** The script runs unchanged outside
+Glue, and it was run against the live archive and the real Bronze bucket on
+2026-09-06: four asset-months written, checksums verified, both timestamp eras
+handled, the manifest written to artifacts. Two things fell out that are worth
+recording because they confirm the documents rather than the code:
+
+- `BTCUSDT-1m-2018-01` came back with **exactly 44,515 rows** — the figure
+  `data_sources.md` §11 quotes, against January's 44,640 minutes.
+- Re-running wrote **0 and skipped 2**. A 4.4 GB load over the public internet
+  *will* be interrupted, and the correct response to an interruption is to run
+  it again, not to work out what it got through.
+- The `RENDERUSDT` walk queued four asset-months and recorded **two as absent**:
+  the `RNDRUSDT` alias publishes nothing in 2025 because the rename was in 2024.
+  A gap correctly classified rather than an error.
+
+### `source` became a partition key, and a column could not have done the job
+
+Phase 6 wrote `source` on the klines table as a plain column and left "backfill"
+for this phase. Carrying that out exposed something a column cannot express:
+**Phase 7 is the first phase with two writers into one dataset**, and both key
+their Spark partitions on `(dt, hour)`.
+
+Spark offers two write modes and both are wrong across two writers. `append`
+makes a re-run duplicate everything — and this job gets re-run. Dynamic
+partition overwrite is idempotent, which is what a resumable load needs, but it
+replaces a whole partition directory, so a backfilled month overlapping the
+stream would **silently delete the streamed rows for those hours**.
+
+Promoting `source` to the first partition key gives each writer its own subtree.
+Both can then use the write mode that suits them — the stream appends because
+bookmarks make it incremental, the backfill overwrites because it re-derives
+whole months from immutable files — and neither can touch the other. It is still
+one table and `source` is still a column to any query.
+
+Done now rather than deferred because the table is **empty**: Phase 2.1 deleted
+the lake, so this costs a schema edit and no migration. Same reasoning Phase 6
+used for its two renames — do the structural change at the moment nothing is
+behind it.
+
+### The indicator maths is a SQL file, and that is why it is tested
+
+The features are not `.withColumn()` chains. They are
+[`glue_jobs_silver_gold/gold/indicators.sql`](./glue_jobs_silver_gold/gold/indicators.sql),
+expanded by one shared module and executed by **Spark on Glue and DuckDB in the
+unit test**. The maths therefore has one owner, like bucket names (Phase 2.1),
+job names (Phase 3) and the asset list (Phase 5) — and, unlike any of those, it
+can be verified on a laptop with no JVM and no AWS.
+
+`tests/test_indicators.py` runs **13 tests in 0.6 s**, in three layers, because
+any one alone is weak:
+
+1. **Hand-computed literals** on series small enough to check on paper. This is
+   the layer that catches a definition *both* implementations misunderstand —
+   an independent implementation written by the same person on the same
+   afternoon is not independent about the definition, only about the code.
+2. **An independent Python implementation** of every window, compared row by
+   row. Catches frame off-by-ones, null handling and gap semantics.
+3. **Adversarial series** — a 30-minute halt, a flat stablecoin, a single-bar
+   symbol — one per claim the SQL's header makes, so a claim that stops being
+   true fails a test instead of ageing quietly into a lie.
+
+**Nothing is recursive, stated as a limitation rather than hidden.** Wilder's
+RSI, EMA and MACD define today's value in terms of yesterday's *output*, which
+SQL windows cannot express and Spark can only fake with a row-by-row UDF over
+133 million rows. So `rsi_14` is **Cutler's RSI** — a published variant using
+simple moving averages, *not* an approximation of Wilder's — and the tests check
+it against its own definition.
+
+**Every frame is `RANGE`-on-time, never `ROWS`.** The series is gappy, and
+`ROWS BETWEEN 59 PRECEDING` counts rows, so across a halt a "60-minute" average
+silently becomes a 90-minute one. Counting time makes the window hold fewer
+bars instead, and `bars_in_60m` reports that rather than hiding it.
+
+**A flat series returns null, not the conventional midpoint.** RSI 50 and a
+Bollinger z of 0 on a stablecoin pinned at 1.0000 are *fabricated observations* —
+and the universe carries stablecoins precisely as a negative control
+(`data_sources.md` §5). A model that signals on them is broken; it should not be
+handed the inputs that let it.
+
+### The label is cost-aware, and the rows are sampled for a statistical reason
+
+Binary: does the forward log return over 60 minutes exceed **20 bps**? That is
+a round-trip Binance taker fee before slippage. "The price went up" would mark a
+great many moves that **lost money**, and a model that predicts them perfectly is
+worthless. It also makes the positive class a minority, which is why Phase 8's
+baseline metric is **PR-AUC and not accuracy** — on a class this imbalanced,
+"always predict no" scores well and does nothing.
+
+Rows are kept on a **60-minute epoch-anchored grid**. At a 60-minute horizon the
+labels of two adjacent minutes share 59 minutes of outcome; they are not
+independent observations, and scoring them as such inflates every validation
+number. The stride makes consecutive retained rows have disjoint label windows.
+
+This remains a technical demonstration. The threshold makes the target *mean*
+something; it does not make the output actionable.
+
+### The cadence question Phase 6 left open: the machine stays daily
+
+A stream feeding a once-a-day batch sounds like a mismatch. It is not one here:
+
+- Nothing downstream is latency-sensitive — the output is a **training set**, and
+  a model retrained daily at most cannot use one rebuilt hourly.
+- **The serving path does not read these tables.** Phase 10 computes features at
+  request time from the last 1440 minutes, running the same `indicators.sql` in
+  a different engine. Inference freshness is bounded by Firehose's five-minute
+  buffer, not by this schedule. An hourly batch would not make one prediction
+  fresher.
+- It would cost ~24× for that, because Glue bills a one-minute minimum per run
+  per worker and the chain is now six jobs.
+
+The grain of the *data* is one minute and the grain of the *pipeline* is one
+day, and nothing between them needs the difference closed.
+
+**What makes a daily run over 133 million rows affordable** is that every window
+is time-bounded and the longest spans 1440 minutes, so a day's features need
+that day plus a bounded tail — `PROCESS_MODE=incremental` with a two-day
+look-back and a warm-up window on top. The full 2017 rebuild is the same job
+with `--PROCESS_MODE full`, run once, by hand. Without the warm-up the bug is
+silent: indicators restart from nothing at every midnight and the model sees a
+daily sawtooth that is an artefact of the scheduler.
+
+### Gold's catalog moved into Terraform, and the migration found a live defect
+
+Backlog item, assigned here because this is the phase that rewrites the Gold
+jobs. The three hand-run `.sql` files are superseded by
+`terraform/modules/catalog/gold_tables.tf`, and migrating them turned up drift
+that was never going to announce itself:
+
+- `gold_ohlc` pinned `asset_id` to an **enum of eleven ids** — the provisional
+  list from before Phase 4 — one of which (BAT, `1697`) is no longer in the
+  project at all. **40 of the 50 tracked assets would have been invisible to
+  Athena**, not missing with an error.
+- `gold_features_base` and `gold_ohlc` carried two different, unrelated
+  projection start dates.
+
+The enums are now generated from `config/tracked_assets.json`, which removes the
+possibility rather than fixing this instance of it. The four `gold_ohlc_*` views
+are **not** recreated: each was `SELECT * WHERE g = '<grain>'`, which the
+partition key already expresses, and an Athena view stores a base64 blob of its
+own plan — so a column added to the table leaves four views describing a shape
+that no longer exists.
 
 **DoD**
-- [ ] Historical archive backfilled into Bronze, aliases stitched, checksums verified
-- [ ] Streaming data resampled to 1-minute bars in Gold; backfill and stream form one continuous series with a `source` column
-- [ ] Backfill vs stream compared on the overlap window; any field-level divergence explained
-- [ ] Missing minutes treated as missing, never forward-filled (Binance's own archive has gaps: 44,515 of 44,640 minutes in `BTCUSDT-1m-2018-01`)
-- [ ] Indicators implemented and unit-verified against a known reference series
-- [ ] Feature schema documented and versioned
-- [ ] Job cadence chosen and justified against the streaming grain
-- [ ] Features queryable in Athena, with no null explosion at series boundaries
+- [x] Backfill job written, and **rehearsed against the live archive and real S3**
+- [x] Aliases stitched — the walk queues every pre-rename ticker and classifies
+      an absent month as absent rather than as a failure
+- [x] Checksums verified against the published `.CHECKSUM`, before extraction
+- [x] Streaming and backfill form one continuous table with a `source` column —
+      now a partition key, so both writers are idempotent
+- [x] Missing minutes treated as missing: nothing is forward-filled, `RANGE`
+      frames shrink across a gap, `minutes_since_prev` and `bars_in_60m` carry it
+- [x] Indicators implemented and unit-verified — 13 tests, three layers, no Spark
+- [x] Feature schema documented and versioned — [`feature_schema.md`](./feature_schema.md), `v1`
+- [x] Job cadence chosen and justified against the streaming grain
+- [ ] **The full 4.4 GB load has not run**, and neither has the Silver/Gold
+      chain over it. It needs the apply first, and it is the one part of this
+      phase that costs real money (a few dollars of FLEX Glue, ~$0.15/month of
+      S3). Four asset-months are loaded as a rehearsal.
+- [ ] **Backfill vs stream on the overlap window** — impossible today: the
+      stream has never run, so there is no stream half to compare against. The
+      query is written down in `sql/athena_verification_phase7.sql` §3 and runs
+      at the wake-up. This is the same honesty Phase 6 applied to its own
+      Athena check.
+- [ ] **Features queryable in Athena with no null explosion at boundaries** —
+      the check exists (`§5` of the same file) and needs data behind it.
 
 **Prompt to run**
 
@@ -1601,15 +1789,15 @@ phase. Each is tagged with where it gets resolved.
 | **Producer hosting: Fargate 24/7 vs time-boxed vs Lambda polling** | Phase 5 | ⚠️ Open decision, Angel's call. First recurring cost in the project — not to be defaulted into |
 | **The producer image has never been built; ECR is empty** | Phase 12 | Phase 5's task definition pulls `:latest` from `crypto-binance-producer-crypto` and nothing has ever been pushed there, so `streaming_enabled = true` would fail with `CannotPullContainerError`. Deferred deliberately — Phase 12's GitHub Actions pipeline builds that image anyway — but it is a **wake-up precondition**, not a nice-to-have. `producer/Dockerfile` has also never been executed, which is the same unvalidated-code risk Phase 5 rejected elsewhere |
 | **Two deployed names now lie, and Phase 5 made it worse** | Phase 6 ✅ | The EventBridge rule is `schedule-fetch-top10-5-min-bronze-crypto` and the Lambda is `fetch-top10-crypto-crypto`. Neither was ever accurate — the list was 11, not 10 — and Phase 5 made both wrong twice over: 50 assets, hourly. `name` is ForceNew on both, so fixing them is a destroy+create. Deliberately NOT done in Phase 5, to keep its plan at **0 destroyed**; Phase 6 already touches this surface and both resources are DISABLED, so it is the cheap moment. The same reasoning Phase 3 used to rename the EventBridge `target_id`. Angel approved the rename for Phase 6, so that phase's plan is NOT 0-destroyed and that is expected, not drift. **Done:** now `cmc-extractor-crypto` and `schedule-cmc-extractor-crypto`. The cadence is deliberately absent from the new name — `schedule_expression` is a variable, and a name repeating a variable's value is a second copy that cannot be kept in sync |
-| **Backfill the Binance kline archive from 2017** | Phase 7 | Free at `data.binance.vision`, no key: 3,135 asset-months, ~133M 1-minute candles, ~4.4 GB, $0, and it bypasses Kinesis. Reaches 2017-07 (Binance's own start), not 13 years. Use klines, never aggTrades — one month of BTCUSDT aggTrades is 362 MB against 2.1 MB for klines |
-| Resample the stream to 1-minute bars in Gold to meet the backfill | Phase 7 | The archive and the live `@kline_1m` event are the same twelve fields from the same exchange, so the stitch is exact. Carry `source ∈ {backfill, stream}` and validate on the overlap |
-| Stitch pre-rename tickers when backfilling | Phase 7 | `RNDRUSDT` holds 33 months RENDER does not; `MATICUSDT` holds 66 months POL does not. `binance_symbol_aliases` in `config/tracked_assets.json` exists for this |
-| Layer the feature schema by data availability | Phase 7 | 1-minute OHLCV features span 2017→now; tick-derived features start at Phase 5. One flat schema would be mostly null where it matters |
+| **Backfill the Binance kline archive from 2017** | Phase 7 ✅ | Free at `data.binance.vision`, no key: 3,135 asset-months, ~133M 1-minute candles, ~4.4 GB, $0, and it bypasses Kinesis. Reaches 2017-07 (Binance's own start), not 13 years. Use klines, never aggTrades — one month of BTCUSDT aggTrades is 362 MB against 2.1 MB for klines |
+| Resample the stream to 1-minute bars in Gold to meet the backfill | Phase 7 ✅ | The archive and the live `@kline_1m` event are the same twelve fields from the same exchange, so the stitch is exact. Carry `source ∈ {backfill, stream}` and validate on the overlap |
+| Stitch pre-rename tickers when backfilling | Phase 7 ✅ | `RNDRUSDT` holds 33 months RENDER does not; `MATICUSDT` holds 66 months POL does not. `binance_symbol_aliases` in `config/tracked_assets.json` exists for this |
+| Layer the feature schema by data availability | Phase 7 ✅ | 1-minute OHLCV features span 2017→now; tick-derived features start at Phase 5. One flat schema would be mostly null where it matters |
 | Optional: BTC-quoted pairs for pre-2019 depth | Phase 7 | `ZECBTC`, `LINKBTC`, `XMRBTC` reach 16 months further than their USDT pairs. Needs a synthetic USD series (`price_btc × BTCUSDT`), so flag provenance and never mix it in silently |
 | Firehose partitioning: dynamic vs native prefix | Phase 6 ✅ | **Native prefix.** The premise was wrong — `!{timestamp:...}` works in a plain prefix with no surcharge, so Phase 5 had already written the free Hive layout. Dynamic partitioning would have added ~$4.80/mo (+38%) for a `symbol=` level that is already a payload field, and it is a one-way door: enable-at-creation only, never disableable. Full numbers in `modules/ingestion/streaming.tf` |
-| Gold's tables are hand-run DDL; Silver's are Terraform | Phase 7 | Phase 6 made the three Silver tables `aws_glue_catalog_table` resources rather than adding to `sql/athena_projections_*.sql`, because replacing an automated crawler with a manual DDL step would have been a regression in automation. That leaves two mechanisms in one catalog. Phase 7 already rewrites the Gold jobs, so it is the cheap moment to move their three `.sql` files across |
-| Widen `streaming_projection_start_date` when the backfill lands | Phase 7 | Defaults to `2026-09-01`. A row written OUTSIDE a projected `dt` range is INVISIBLE to Athena rather than an error, so the 2017 backfill must widen this in the SAME change that writes those rows, or it will look like the backfill silently did nothing |
-| The daily trigger may be the wrong grain over a stream | Phase 7 | Phase 6 left the state machine daily and added `SilverBinanceJob` to the chain. A stream feeding a once-a-day batch is a cadence question Phase 7 inherits, not a defect |
+| Gold's tables are hand-run DDL; Silver's are Terraform | Phase 7 ✅ | Phase 6 made the three Silver tables `aws_glue_catalog_table` resources rather than adding to `sql/athena_projections_*.sql`, because replacing an automated crawler with a manual DDL step would have been a regression in automation. That leaves two mechanisms in one catalog. Phase 7 already rewrites the Gold jobs, so it is the cheap moment to move their three `.sql` files across |
+| Widen `streaming_projection_start_date` when the backfill lands | Phase 7 ✅ | Defaults to `2026-09-01`. A row written OUTSIDE a projected `dt` range is INVISIBLE to Athena rather than an error, so the 2017 backfill must widen this in the SAME change that writes those rows, or it will look like the backfill silently did nothing |
+| The daily trigger may be the wrong grain over a stream | Phase 7 ✅ | Phase 6 left the state machine daily and added `SilverBinanceJob` to the chain. A stream feeding a once-a-day batch is a cadence question Phase 7 inherits, not a defect |
 | Phase 6 was written without AWS credentials | Phase 6 ✅ | Static checks only while writing it — `fmt`, `validate`, an ASL reachability check, a Python compile. Angel applied it on 2026-09-06 and the plan matched the predicted categories: 10 added, 4 changed, 10 destroyed, clean plan afterwards. The orphan Silver table did exist and had to be dropped first |
 | SNS topic policy blocks `cloudwatch.amazonaws.com` | Phase 11 | Alarms would fail silently |
 | Split SNS into ops vs signals topics | Phase 11 | |
@@ -1618,6 +1806,9 @@ phase. Each is tagged with where it gets resolved.
 | Remove the crawler polling states | Phase 6 ✅ | Four states and ~3 min/run gone, plus a `Default` branch that looped forever on a FAILED crawl |
 | Split into two state machines | Phase 13 | Before the feedback loop makes it unreadable |
 | All 3 EventBridge rules are DISABLED in AWS | Phase 5 | Intentional — project is dormant. Re-enable only once Phase 3 and Phase 5 are both done. **Phase 3 is now done**, so Phase 5 is the only remaining precondition |
+| **The three Gold job names still say `cmc`** | Phase 12 | `gold-base-features-cmc-crypto`, `gold-ohlc-day-cmc-crypto`, `gold-ml-training-cmc-crypto`. Gold is source-agnostic by definition — Phase 2.1 made its prefixes dataset names for that reason — and since Phase 7 the ML job has not read a CoinMarketCap table at all. `name` is ForceNew, so this is a destroy+create; free, because the jobs are idle and the lake behind them is empty. Deliberately NOT bundled into Phase 7: Phase 6's rename was approved as its own decision with its own destroy count, and quietly attaching three more destroys to an unrelated phase is how a plan stops being reviewable |
+| **The Binance archive switches ms → µs at 2025-01** | Phase 7 ✅ | Not in `data_sources.md` §11, which says the archive and the stream are "the same twelve fields" — true of the fields, not of their units. Verified against four real months either side of the boundary. Detected from the VALUE's magnitude rather than from the month, so a re-published old file cannot break it. Reading µs as ms does not error; it puts January 2025 in the year 56,000, which a partition filter then hides |
+| **The full 4.4 GB backfill has not been run** | after the Phase 7 apply | The job is built and rehearsed on four asset-months. The full load needs `terraform apply` first, takes hours, and is the one part of Phase 7 that costs real money: a few dollars of FLEX Glue plus ~$0.15/month of S3. Run it with `--PROCESS_MODE full` on the Gold jobs afterwards |
 | The neighbour `loteria-pipeline` project | after Phase 12 | Apply the container pattern there once internalised |
 
 ---

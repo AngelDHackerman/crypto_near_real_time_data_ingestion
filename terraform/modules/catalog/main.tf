@@ -362,22 +362,43 @@ resource "aws_glue_catalog_table" "silver_binance_klines" {
     classification       = "parquet"
     "projection.enabled" = "true"
 
-    # Phase 7 backfills to 2017, and a row outside the projected range is
-    # invisible rather than an error -- so this bound is the one thing here
-    # that Phase 7 MUST widen when it lands.
+    # PHASE 7 WIDENED THIS, and it had to happen in the same change that wrote
+    # the rows. A row outside the projected range is INVISIBLE to Athena rather
+    # than an error, so a backfill to 2017 against a range starting in 2026
+    # would look exactly like a backfill that silently did nothing.
+    #
+    # The trades table above keeps the streaming start date: nothing backfills
+    # aggregate trades, so widening it there would only make Athena enumerate
+    # nine years of partitions that cannot exist.
     "projection.dt.type"          = "date"
     "projection.dt.format"        = "yyyy-MM-dd"
     "projection.dt.interval"      = "1"
     "projection.dt.interval.unit" = "DAYS"
-    "projection.dt.range"         = "${var.streaming_projection_start_date},NOW"
+    "projection.dt.range"         = "${var.backfill_projection_start_date},NOW"
 
     "projection.hour.type"   = "integer"
     "projection.hour.range"  = "0,23"
     "projection.hour.digits" = "2"
 
-    "storage.location.template" = "${local.silver_binance_klines_location}/dt=$${dt}/hour=$${hour}"
+    # `source` IS A PARTITION KEY IN PHASE 7, NOT A COLUMN, and the reason is
+    # write safety rather than query speed. This dataset now has two writers --
+    # the streaming Silver job and the archive backfill -- and both key their
+    # Spark partitions on (dt, hour). Dynamic partition overwrite, which is what
+    # makes a re-runnable 133-million-row load safe, replaces a whole partition
+    # directory; with a shared (dt, hour) the backfill would delete streamed
+    # rows for any hour the two both cover. Giving each writer its own subtree
+    # removes the collision instead of scheduling around it. The full argument
+    # is in silver_binance_backfill_job.py.
+    "projection.source.type"   = "enum"
+    "projection.source.values" = "stream,backfill"
+
+    "storage.location.template" = "${local.silver_binance_klines_location}/source=$${source}/dt=$${dt}/hour=$${hour}"
   }
 
+  partition_keys {
+    name = "source"
+    type = "string"
+  }
   partition_keys {
     name = "dt"
     type = "date"
@@ -472,10 +493,9 @@ resource "aws_glue_catalog_table" "silver_binance_klines" {
       name = "producer_lag_ms"
       type = "bigint"
     }
-    columns {
-      name = "source"
-      type = "string"
-    }
+    # `source` is deliberately absent from this list: it became a partition key
+    # above, and Athena rejects a table that declares the same name in both.
+    # It is still a column to every query.
   }
 }
 

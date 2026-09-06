@@ -48,3 +48,8 @@ variable "daily_schedule_enabled" {
   type        = bool
   default     = false
 }
+
+variable "gold_market_features_job_name" {
+  description = "Name of the 1-minute feature Glue job (roadmap.md, Phase 7). Runs after the OHLC job and before the ML training set, because the labelled rows are built from its output."
+  type        = string
+}
