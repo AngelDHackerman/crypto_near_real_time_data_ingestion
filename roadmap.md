@@ -113,7 +113,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ✅ Done | `phase-6/bronze-layout-silver-projection` | **10 added, 4 changed, 10 destroyed**, plan clean afterwards. Not 0-destroyed on purpose: 5 of the destroys are the approved rename's ForceNew blast radius, 5 are the crawler and its IAM. Project still dormant — three rules `DISABLED`, no Kinesis stream |
 | 7 | Feature engineering | ✅ Done | `phase-7/feature-engineering` | **16 added, 8 changed, 0 destroyed**. Backfill job rehearsed against the live archive and real S3; indicator maths is one SQL file verified by 13 tests on DuckDB, no Spark needed. `source` promoted to a partition key. Gold catalog migrated out of hand-run DDL, which found an 11-id projection hiding 40 assets. Full 4.4 GB load and the overlap check wait for the apply and the wake-up |
 | 8 | Model training | ✅ Done | `phase-8/model-training` | 5 resources, all free. XGBoost binary classifier on AWS's managed container, pinned — the ECR repo exists but **nothing references it**, applying Phase 5's lesson rather than repeating it. Purged time split with an embargo, PR-AUC quoted against the positive rate. 16 more tests, no Spark or AWS needed. The run itself and the baseline metric wait for data |
-| 9 | Model registry | ⬜ Not started | | |
+| 9 | Model registry | ✅ Done | `phase-9/model-registry` | 2 resources, both free. The promotion RULE is a pure function with 13 tests -- margin over champion, absolute floor, minimum validation rows, and a hard block when the label or feature version changed, because then the numbers are not comparable. Registering two real versions waits for data |
 | 10 | Serving / inference | ⬜ Not started | | |
 | 11 | Monitoring & alerting (SNS refactor) | ⬜ Not started | | |
 | 12 | Containerization + GitHub Actions CI/CD | ⬜ Not started | | Learn in depth, do not delegate |
@@ -1689,18 +1689,89 @@ job is an unbounded bill, in an account shared with other projects.
 
 ---
 
-## Phase 9 — Model registry
+## Phase 9 — Model registry ✅
 
-**Scope**
+**Goal:** version models, and make promotion a rule rather than a click.
 
-- `aws_sagemaker_model_package_group` to version models and mark which version is
-  staging vs production.
-- Hook into CI/CD so promotion from staging to production needs no manual step.
+**Applied:** *pending Angel's apply.* Cumulative plan **23 added, 9 changed, 0
+destroyed**; Phase 9's own share is two resources, both free — a model package
+group and an unattached IAM policy.
+
+---
+
+### What a registry adds that an S3 key does not
+
+The training job already writes `model.tar.gz` to S3, so it is fair to ask what
+this buys. Three things a path cannot:
+
+- **It binds an artifact to the metrics it earned and the code that made it.**
+  Phase 13 compares a challenger against a champion, and that needs the
+  champion's numbers to still exist months later.
+- **It has an approval state deployment can gate on**, so "which model is in
+  production" is a fact the system holds rather than one a person remembers.
+- **It carries an `InferenceSpecification`**, so Phase 10 deploys a registry
+  *version* rather than an S3 URI plus a hand-copied image name.
+
+### "Scripted, not clicked" means the *criteria* are code
+
+A script that calls `UpdateModelPackage` is not what that phrase means —
+clicking Approve and running a script that approves unconditionally are the same
+decision made by the same person, one of them just faster.
+
+So the rule lives in `ml/registry/promotion_policy.py`: **no boto3, no AWS, a
+pure function**, with 13 tests that run in milliseconds. `promote_model.py`
+talks to SageMaker and contains no judgement at all.
+
+**The rule, and why each clause is there:**
+
+| Gate | Value | Why it exists |
+|---|---|---|
+| Beat the champion by a margin | **+5% relative lift** | Two models trained on overlapping windows differ by noise in the third decimal. Promoting on *any* improvement makes noise the champion the next candidate must beat — the registry then random-walks upward while every step looks like progress |
+| Absolute lift floor | **1.10** | A model that barely beats flagging every row should not ship, whatever it beats the incumbent by |
+| Minimum validation rows | **5,000** | A validation set this small cannot distinguish a good model from a lucky one |
+| Same `label_version` **and** `feature_block_version` | exact match | A model trained on a 240-minute horizon shows a bigger lift than one trained on 60 minutes *for reasons that have nothing to do with the model*. The comparison is only meaningful within one target and one feature set — which is why both versions travel on every feature row and into the registry |
+| p95 latency | **≤ 500 ms**, off by default | Phase 10 measures it; Phase 13 turns the gate on. **Not asserted rather than assumed to pass** — a gate that silently never fires is worse than no gate |
+
+**Every failing reason is reported, not just the first.** A candidate rejected
+for three reasons and one rejected for one are different situations, and the
+person reading the log is deciding what to change.
+
+### Two smaller decisions worth naming
+
+**Registration is not approval.** Every version lands as
+`PendingManualApproval`, and `promote_model.py` is the only thing that moves it.
+A rejected candidate is marked **`Rejected`**, not left pending — a queue of
+Pending versions nobody looked at is indistinguishable from a queue the rule has
+not run on yet.
+
+**Promote before demote.** If the process dies between the two calls there are
+briefly *two* production markers, which a human can see and fix. The other order
+leaves a window with **none**, and "nothing is in production" is the state a
+deploy reads as "deploy nothing".
+
+**Staging vs production is `CustomerMetadataProperties.stage`**, not the
+approval status. `ModelApprovalStatus` has three values and they answer "is this
+allowed to ship"; the stage answers "what is it doing now". Overloading one
+field for both makes an archived former champion indistinguishable from a
+rejected candidate.
+
+### The IAM policy is written and attached to nothing
+
+Promotion runs by hand today and from Phase 12's GitHub Actions later. Creating
+the **role** now would mean guessing Phase 12's trust policy — OIDC provider,
+repository, branch conditions — months before it is written, and a role with a
+wrong trust policy is worse than no role. The **policy** is not a guess: it is
+exactly the calls the two scripts make, so it is written and reviewed now and
+attached in one line when the role exists. An unattached policy grants nothing.
 
 **DoD**
-- [ ] Model package group defined in Terraform
-- [ ] At least two model versions registered, with a clear staging/production marker
-- [ ] Promotion is scripted, not clicked
+- [x] Model package group defined in Terraform
+- [x] Promotion is scripted — and, more to the point, the criteria are code with
+      tests rather than a rule someone applies
+- [x] A clear staging/production marker, separate from the approval status
+- [ ] **At least two model versions registered** — needs two training runs,
+      which need data. Deferred with the rest of the wake-up; the registration
+      and promotion paths are written and their decision logic is verified
 
 **Prompt to run**
 

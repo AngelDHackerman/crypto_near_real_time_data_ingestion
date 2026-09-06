@@ -129,3 +129,9 @@ output "training_image_repository_url" {
   description = "ECR repository for the training image. Empty until Phase 12, and referenced by nothing until then -- deliberately, so it cannot become the wake-up blocker Phase 5's empty repository did."
   value       = module.ml.training_image_repository_url
 }
+
+# --- Phase 9 -----------------------------------------------------------------
+output "model_package_group_name" {
+  description = "Model registry group. Pass to ml/registry/register_model.py and promote_model.py."
+  value       = module.ml.model_package_group_name
+}

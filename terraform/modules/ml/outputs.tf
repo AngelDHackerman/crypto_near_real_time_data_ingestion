@@ -17,3 +17,14 @@ output "training_code_uri" {
   description = "Where the packaged training source directory is uploaded, one prefix per training job."
   value       = "s3://${var.artifacts_bucket_id}/${var.ml_code_prefix}/"
 }
+
+# --- Phase 9 -----------------------------------------------------------------
+output "model_package_group_name" {
+  description = "The model registry group. Pass to register_model.py and promote_model.py."
+  value       = aws_sagemaker_model_package_group.signal_model.model_package_group_name
+}
+
+output "model_promotion_policy_arn" {
+  description = "IAM policy granting exactly what the registry scripts call. Attached to nothing until Phase 12's CI role exists -- guessing that role's trust policy now would be worse than leaving it unattached."
+  value       = aws_iam_policy.model_promotion.arn
+}
