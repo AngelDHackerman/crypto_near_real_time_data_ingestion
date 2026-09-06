@@ -282,3 +282,6 @@ $RECYCLE.BIN/
 # Phase 10: the DuckDB Lambda layer is built by serving/inference/build_layer.sh,
 # never committed -- a binary wheel in git rots without looking like it has.
 serving/inference/build/
+
+# Phase 11: the Slack notifier zip is built by Terraform at apply time.
+slack_notifier_lambda/build/

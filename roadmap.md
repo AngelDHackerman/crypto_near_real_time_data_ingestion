@@ -66,14 +66,25 @@ defaulting to off, and a gate is `count = 0` when the resource bills merely by
 existing — a disabled schedule is free, a created shard is not. Three flags
 carry this today, all `false`:
 
-| Flag | Gates | Cost when open |
-|---|---|---:|
-| `eventbridge_rule_enabled` | the CMC extractor's schedule | ~$0 (CMC free tier) |
-| `sfn_daily_schedule_enabled` | the daily Silver → Gold schedule, i.e. five Glue job runs a day | Glue DPU-hours per run |
-| `streaming_enabled` | the Kinesis stream, the Firehose delivery stream, the producer's `desired_count` | ~$25/mo |
+| Flag | Gates | Cost when open | Guards |
+|---|---|---:|---|
+| `eventbridge_rule_enabled` | the CMC extractor's schedule | ~$0 (CMC free tier) | a bill |
+| `sfn_daily_schedule_enabled` | the daily Silver → Gold schedule, now **six** Glue job runs a day | Glue DPU-hours per run | a bill |
+| `streaming_enabled` | the Kinesis stream, the Firehose delivery stream, the producer's `desired_count` | ~$25/mo | a bill |
+| `serving_enabled` | the SageMaker model, endpoint config, endpoint and inference Lambda | **$0 at rest** (serverless, per-request) | **an apply that would fail** |
+| `slack_enabled` | the Slack notifier Lambda and its SNS subscription | $0 | **a credential that does not exist** |
 
-The middle one is new in Phase 6, and it is a gap being closed rather than a
-feature. That rule had **no `state` in Terraform at all**: the fact that the
+**The last two are not cost gates, and reading them as such is a mistake this
+table exists to prevent.** `serving_enabled = true` does not start a bill —
+serverless inference costs nothing at rest — it fails the apply, because an
+`aws_sagemaker_model` requires a model artifact that no training run has
+produced yet. `slack_enabled = true` costs nothing either; it creates a
+subscription that fails on every message until a human pastes a webhook into
+Secrets Manager. Three different reasons a flag defaults to false, and only one
+of them is money.
+
+`sfn_daily_schedule_enabled` is new in Phase 6, and it was a gap being closed
+rather than a feature. That rule had **no `state` in Terraform at all**: the fact that the
 daily pipeline was switched off lived in the AWS console and was asserted
 nowhere in this repository. A dormancy that only the console knows about is one
 apply away from ending.
@@ -85,13 +96,31 @@ roles, ECR repositories, task definitions, log groups, Glue jobs, the state mach
 Waking up is flipping those flags, deliberately and as code, never by clicking in
 the console. Until that moment the correct state of this project is **asleep**.
 
-**One precondition stands between the flags and a working wake-up.** Phase 5 built
-the ECR repository and a task definition that pulls `:latest`, but **the producer
-image has never been built and the repository is empty** — so flipping
-`streaming_enabled` today starts a task that dies on `CannotPullContainerError`.
-Closing it is Phase 12's job, where the CI/CD pipeline builds that image anyway.
-Recorded in both places because an implicit precondition is one you discover on
+**Preconditions standing between the flags and a working wake-up.** Each is
+recorded in two places, because an implicit precondition is one you discover on
 the day it blocks you.
+
+1. **The producer image has never been built and its ECR repository is empty**
+   (Phase 5). Flipping `streaming_enabled` today starts a task that dies on
+   `CannotPullContainerError`. Phase 12's CI/CD pipeline builds that image
+   anyway. **This is the only one that blocks the ingestion wake-up.**
+2. **The full 4.4 GB backfill has not run** (Phase 7). The job is built and
+   rehearsed on four asset-months against the live archive; the full load needs
+   the apply first, takes hours, and is the one part of Phases 7–11 that costs
+   real money — a few dollars of FLEX Glue, ~$0.15/month of S3.
+3. **No model exists**, so `serving_enabled` cannot be true (Phases 8–10).
+   Training → registry → promotion, in that order; the scripts and their
+   decision rules are written and tested.
+4. **The Slack webhook and the DuckDB Lambda layer** (Phases 10–11). One is a
+   paste into Secrets Manager, the other is `serving/inference/build_layer.sh`.
+5. **The new ops-alerts email subscription needs confirming** (Phase 11). AWS
+   cannot confirm one on anyone's behalf, and the destroyed topic's confirmation
+   does not transfer.
+
+Phases 8 through 11 add **nothing to the recurring bill**: an IAM role, an empty
+ECR repository, a model package group, two SNS topics, three CloudWatch alarms
+inside the free tier, and a Secrets Manager secret. The lake is fully built, the
+ML half is fully built, and both are asleep.
 
 Phase 3 deliberately did not wake anything, and this was checked rather than
 assumed: all three rules were re-read from AWS after the apply and are still
