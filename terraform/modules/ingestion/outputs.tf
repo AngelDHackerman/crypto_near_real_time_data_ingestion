@@ -1,11 +1,11 @@
 output "lambda_function_name" {
   description = "Name of the CMC extractor Lambda."
-  value       = aws_lambda_function.fetch_top10_crypto.function_name
+  value       = aws_lambda_function.cmc_extractor.function_name
 }
 
 output "lambda_function_arn" {
   description = "ARN of the CMC extractor Lambda."
-  value       = aws_lambda_function.fetch_top10_crypto.arn
+  value       = aws_lambda_function.cmc_extractor.arn
 }
 
 output "lambda_role_arn" {

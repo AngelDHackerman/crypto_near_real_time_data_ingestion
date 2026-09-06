@@ -31,3 +31,8 @@ output "gold_role_arn" {
   description = "ARN of the shared Gold jobs execution role."
   value       = aws_iam_role.glue_gold_base.arn
 }
+
+output "silver_binance_job_name" {
+  description = "Name of the Binance stream Silver Glue job (roadmap.md, Phase 6)."
+  value       = aws_glue_job.silver_binance_job.name
+}

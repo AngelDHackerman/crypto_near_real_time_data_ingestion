@@ -97,7 +97,7 @@ module "ingestion" {
   rule_enabled        = var.eventbridge_rule_enabled
 
   lambda_source_file = "${local.repo_root}/extractor_bronze_lambda/app.py"
-  lambda_build_path  = "${local.repo_root}/extractor_bronze_lambda/build/fetch_top10.zip"
+  lambda_build_path  = "${local.repo_root}/extractor_bronze_lambda/build/cmc_extractor.zip"
 
   # --- streaming path -------------------------------------------------------
   streaming_enabled       = var.streaming_enabled
@@ -109,17 +109,24 @@ module "ingestion" {
 }
 
 # -----------------------------------------------------------------------------
-# Catalog -- Glue databases, the Silver crawler, the Athena workgroup.
+# Catalog -- Glue databases, the projected Silver tables, the Athena workgroup.
+# Phase 6 deleted the Silver crawler; nothing here starts one any more.
 # -----------------------------------------------------------------------------
 module "catalog" {
   source = "../../modules/catalog"
 
-  project               = var.project
-  environment           = var.environment
-  tags                  = var.tags
-  silver_bucket_id      = module.storage.silver_bucket_id
-  silver_bucket_arn     = module.storage.silver_bucket_arn
-  silver_prefix         = var.silver_prefix
+  project     = var.project
+  environment = var.environment
+  tags        = var.tags
+
+  silver_bucket_id        = module.storage.silver_bucket_id
+  silver_prefix           = var.silver_prefix
+  silver_streaming_prefix = var.silver_streaming_prefix
+
+  # Phase 6: silver_bucket_arn is gone from this list. It existed only to scope
+  # the Silver crawler's read policy, and the crawler is gone.
+  streaming_projection_start_date = var.streaming_projection_start_date
+
   artifacts_bucket_id   = module.storage.artifacts_bucket_id
   athena_results_prefix = var.athena_results_prefix
 }
@@ -141,6 +148,12 @@ module "processing" {
   silver_bucket_id  = module.storage.silver_bucket_id
   silver_bucket_arn = module.storage.silver_bucket_arn
   silver_prefix     = var.silver_prefix
+
+  # Phase 6: the Binance stream's own way through Silver. Same buckets, same
+  # execution role, different source -- Silver stays source-separated and the
+  # join happens in Gold (data_sources.md section 10).
+  bronze_streaming_prefix = var.bronze_streaming_prefix
+  silver_streaming_prefix = var.silver_streaming_prefix
 
   gold_bucket_id       = module.storage.gold_bucket_id
   gold_bucket_arn      = module.storage.gold_bucket_arn
@@ -164,13 +177,21 @@ module "orchestration" {
   environment = var.environment
   tags        = var.tags
 
-  silver_job_name        = module.processing.silver_job_name
-  gold_features_job_name = module.processing.gold_features_job_name
-  gold_ohlc_job_name     = module.processing.gold_ohlc_job_name
-  gold_ml_job_name       = module.processing.gold_ml_job_name
-  silver_crawler_name    = module.catalog.silver_crawler_name
+  silver_job_name         = module.processing.silver_job_name
+  silver_binance_job_name = module.processing.silver_binance_job_name
+  gold_features_job_name  = module.processing.gold_features_job_name
+  gold_ohlc_job_name      = module.processing.gold_ohlc_job_name
+  gold_ml_job_name        = module.processing.gold_ml_job_name
 
-  daily_schedule_cron = var.sfn_daily_schedule_cron
+  # Phase 6 dropped silver_crawler_name and added this. The two modules now
+  # reference each other -- orchestration reads the topic ARN, observability
+  # reads the state machine ARN -- which is fine: Terraform's graph is built
+  # over RESOURCES, not modules, and the topic, the machine and the failure
+  # rule form a chain, not a cycle.
+  sns_topic_arn = module.observability.alerts_topic_arn
+
+  daily_schedule_cron    = var.sfn_daily_schedule_cron
+  daily_schedule_enabled = var.sfn_daily_schedule_enabled
 }
 
 # -----------------------------------------------------------------------------

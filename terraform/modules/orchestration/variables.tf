@@ -28,12 +28,23 @@ variable "gold_ml_job_name" {
   type        = string
 }
 
-variable "silver_crawler_name" {
-  description = "Name of the Silver crawler to start and poll. Comes from module.catalog. Phase 6 deletes these states along with the crawler."
+variable "silver_binance_job_name" {
+  description = "Name of the Binance stream Silver Glue job to start (roadmap.md, Phase 6). Comes from module.processing."
+  type        = string
+}
+
+variable "sns_topic_arn" {
+  description = "Topic the NotifyFailure state publishes to. Comes from module.observability, which owns the topic -- the same one-owner-per-fact rule the job names follow."
   type        = string
 }
 
 variable "daily_schedule_cron" {
   description = "EventBridge cron (UTC) driving the daily Silver -> Gold run."
   type        = string
+}
+
+variable "daily_schedule_enabled" {
+  description = "Whether the daily pipeline's EventBridge rule is ENABLED. False while the project is dormant. Added in Phase 6: this rule starts five Glue jobs and had no gate in code at all, so its dormancy lived only in the console."
+  type        = bool
+  default     = false
 }

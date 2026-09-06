@@ -39,10 +39,12 @@ empty buckets and ~170 KB of Terraform state.
 `crypto-tf-state-913524903233`, versioned and locked natively by S3. Losing the
 laptop no longer loses the project.
 
-This is intentional, not an outage. Waking it up while the code is still being
-restructured would mean accumulating data in a Bronze layout that Phase 6 is
-going to change anyway. (The second reason — burning CMC credits on an asset list
-Phase 4 was going to replace — is now spent: Phase 4 froze the list.)
+This is intentional, not an outage. Both of the *technical* reasons it started
+with are now spent: Phase 4 froze the asset list, so waking up no longer burns
+CMC credits on a list about to be replaced, and Phase 6 settled the Bronze
+layout, so data landing now would land in its final shape. What keeps the
+project asleep is no longer a pending change — it is the standing cost decision
+below.
 
 Stronger still: **Phase 2.1 already deleted the lake** — 294,507 objects and
 versions removed on purpose. The four buckets exist and are empty, so there is
@@ -60,13 +62,21 @@ prediction. So dormancy stopped being "wait until the code is stable" and became
 standing constraint on the design.
 
 **What that constraint forces:** every billable resource gets a Terraform gate
-defaulting to off, and a gate is `count = 0`, not merely "disabled" — a disabled
-schedule is free, a created shard is not. Two flags carry this today, both `false`:
+defaulting to off, and a gate is `count = 0` when the resource bills merely by
+existing — a disabled schedule is free, a created shard is not. Three flags
+carry this today, all `false`:
 
 | Flag | Gates | Cost when open |
 |---|---|---:|
 | `eventbridge_rule_enabled` | the CMC extractor's schedule | ~$0 (CMC free tier) |
+| `sfn_daily_schedule_enabled` | the daily Silver → Gold schedule, i.e. five Glue job runs a day | Glue DPU-hours per run |
 | `streaming_enabled` | the Kinesis stream, the Firehose delivery stream, the producer's `desired_count` | ~$25/mo |
+
+The middle one is new in Phase 6, and it is a gap being closed rather than a
+feature. That rule had **no `state` in Terraform at all**: the fact that the
+daily pipeline was switched off lived in the AWS console and was asserted
+nowhere in this repository. A dormancy that only the console knows about is one
+apply away from ending.
 
 Everything that is free to exist — VPC without a NAT Gateway, security groups, IAM
 roles, ECR repositories, task definitions, log groups, Glue jobs, the state machine
@@ -100,7 +110,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 3 | Terraform refactor into modules | ✅ Done | `phase-3/terraform-modules` | 69 `moved {}` blocks, **0 destroyed** on the structural apply. 6 modules + `envs/crypto/`. Plan clean |
 | 4 | Data source strategy (Binance WS + CMC) | ✅ Done | `phase-4/data-source-strategy` | 50 ids frozen in `config/tracked_assets.json`, 45 streamed + 5 CMC-only. CMC quota 86% → 7.3%. No infra touched |
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ✅ Done | `phase-5/streaming-ingestion` [#5] | **Does NOT wake the project.** 19 added, 2 changed, **0 destroyed**, **$0/month** — no Kinesis or Firehose exists behind `streaming_enabled = false`. Producer verified against live Binance locally. Tick-to-S3 check deferred to the wake-up |
-| 6 | Bronze layout, Silver adaptation, catalog cleanup | ⬜ Not started | | Retires the crawler. Buckets/prefixes already settled in 2.1 |
+| 6 | Bronze layout, Silver adaptation, catalog cleanup | ✅ Done | `phase-6/bronze-layout-silver-projection` | **10 added, 4 changed, 10 destroyed**, plan clean afterwards. Not 0-destroyed on purpose: 5 of the destroys are the approved rename's ForceNew blast radius, 5 are the crawler and its IAM. Project still dormant — three rules `DISABLED`, no Kinesis stream |
 | 7 | Feature engineering | ⬜ Not started | | Extends existing Gold jobs |
 | 8 | Model training | ⬜ Not started | | Serverless, no VPC |
 | 9 | Model registry | ⬜ Not started | | |
@@ -338,9 +348,10 @@ This is the layout that makes the Phase 4 story legible in an interview: you can
 point at `bronze/cmc/` and `bronze/binance/` and the two-source architecture is
 visible from the bucket listing alone.
 
-The bronze prefix *below* `cmc/` and `binance/` is still provisional — Phase 6
-replaces the partitioning underneath with whatever Firehose writes. What is fixed
-here is the top level.
+The bronze prefix *below* `cmc/` and `binance/` was left provisional here, for
+Phase 6 to settle against whatever Firehose writes. It is settled now, and it
+turned out that Firehose writes whatever it is told to: `binance/year=/month=/
+day=/hour=/`, Hive-style and free. What is fixed *here* is the top level.
 
 **Scope**
 
@@ -583,8 +594,8 @@ Also deleted, all declared and referenced by nothing: `top10_list_symbol`,
 the Silver database does **not** lower its effective ceiling today, because
 `AWSGlueServiceRole` is still attached and that AWS managed policy grants
 `glue:*` on `*`. What the scoping buys is that detaching the managed policy
-becomes a one-line change instead of a rewrite. Moot in Phase 6, which deletes
-the crawler.
+becomes a one-line change instead of a rewrite. **Moot since Phase 6, which
+deleted the crawler, the role and the managed-policy attachment together.**
 
 **Prompt to run**
 
@@ -1044,58 +1055,217 @@ phase added: **$0**.
 
 ---
 
-## Phase 6 — Bronze layout, Silver adaptation, catalog cleanup
+## Phase 6 — Bronze layout, Silver adaptation, catalog cleanup ✅
 
 **Goal:** absorb the layout change Firehose forces, and retire the crawler.
 
 **Already settled in Phase 2.1:** which bucket each layer lives in, and the fact
-that `top10/` is gone. What remains here is only the *internal* layout of the
-bronze bucket — the shape Firehose writes underneath the `binance/` prefix.
+that `top10/` is gone. What remained here was only the *internal* layout of the
+bronze bucket underneath the `binance/` prefix, and everything the catalog had
+to become once the crawler went away.
 
-**The problem.** Firehose writes `YYYY/MM/DD/HH/` prefixes, not Hive-style. The
-current bronze layout is `id={coin_id}/year=/month=/day=/hour=/`, produced by the
-Lambda. If Firehose writes its native prefix, **the Silver job stops finding the
-data**.
+---
 
-Two options:
+### The partitioning decision — and the premise that turned out to be wrong
 
-1. **Firehose dynamic partitioning** with custom prefixes
-   (`symbol=!{partitionKeyFromQuery:symbol}/year=!{timestamp:yyyy}/...`).
-   Preserves the layout, but costs extra per GB partitioned and needs JQ parsing
-   or a transformation Lambda.
-2. **Keep Firehose's native prefix and adapt the Silver job** to read from
-   `bronze_stream/`. The Silver job re-partitions anyway.
+This phase was written around a problem that does not exist. The scope said:
 
-**Leaning towards option 2** — less engineering, lower cost, identical Silver
-output. Non-negotiable either way: the event timestamp must travel **inside the
-payload**, not only in the S3 path.
+> Firehose writes `YYYY/MM/DD/HH/` prefixes, not Hive-style. […] If Firehose
+> writes its native prefix, **the Silver job stops finding the data**.
 
-**Catalog cleanup.** Gold already uses partition projection with manual DDL — the
-Gold crawlers are commented out in `glue_crawlers_catalog.tf` and there are three
-`sql/athena_projections_*.sql` files. Only Silver still depends on a crawler.
-Migrating Silver to projection lets the crawler be deleted, which in turn lets
-four states be removed from the Step Functions machine.
+**That is only true of the DEFAULT prefix.** Firehose's `timestamp` namespace
+works in an ordinary custom prefix, with dynamic partitioning switched off and
+no surcharge, and AWS's own documentation carries this exact form as an example:
 
-**Step Functions changes** (findings recorded from the Phase 0 review)
+```
+myPrefix/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/
+```
 
-- The `StartCrawler` → `Wait 180s` → `GetCrawler` → `Choice` polling loop can be
-  deleted entirely once Silver uses projection. Four fewer states, ~3 minutes less
-  per run, no crawler cost.
-- **There is no `Catch` anywhere.** Retries are `States.ALL × 3` and nothing else.
-  On failure the execution dies and the EventBridge failure rule fires SNS — it
-  works, but the alert cannot say *which step* failed. Add a `Catch` routing to a
-  `NotifyFailure` state that carries the failed state name.
-- The daily Silver→Gold machine itself stays valid under streaming. Only the
-  producer of bronze changes, not how bronze is processed.
+So there was never a trade-off between "Hive layout" and "free" — only between
+"partition by symbol" and "free". Phase 5 had already written the free one.
+**Verified against the AWS docs and pricing page on 2026-09-05**, and the
+numbers are recorded in `modules/ingestion/streaming.tf` so the choice can be
+re-checked rather than believed.
+
+**Decided: option 2, the native prefix.** What option 1 would have bought is a
+`symbol=` level in the path, at measured volume (47 GB/month, 45 symbols):
+
+| Line item | Rate | At our volume |
+|---|---|---:|
+| Data processed through dynamic partitioning | $0.020 / GB | $0.94/mo |
+| Objects delivered to S3 (dynamic partitioning charge) | $0.005 / 1,000 | $1.94/mo |
+| S3 PUT on those same objects | $0.005 / 1,000 | $1.94/mo |
+| JQ processing | $0.07 / JQ-hour | unit is ambiguous in AWS's own docs — $0 to $51/mo |
+
+**~$4.80/month before JQ, on a $12.62/month ingestion path — +38%** — to buy a
+path component that is *already a field in every payload* (`s`).
+
+Three reasons beyond the money, any one of which is on its own decisive:
+
+1. **It is a one-way door.** Dynamic partitioning can only be enabled when a
+   Firehose stream is *created*, and once enabled **it can never be disabled**.
+2. **It would multiply the object count by 45.** Each symbol gets its own
+   buffer, so 288 objects/day of ~1 MB becomes 12,960/day of ~24 KB — precisely
+   the small-file problem the 300 s buffer was chosen to avoid, reintroduced at
+   45×, and the daily Silver job would open all of them to read the same bytes.
+3. **Our records are aggregated.** The producer batches ~15–35 events into one
+   newline-delimited Kinesis record, so dynamic partitioning would additionally
+   need multi-record deaggregation — another mode to configure and another
+   place data can be dropped silently.
+
+**What the choice costs, stated rather than hidden.** `!{timestamp:...}`
+evaluates to the **approximate arrival timestamp of the oldest record in the
+object being written**, not to the event time. So Bronze's
+`year=/month=/day=/hour=` is an **arrival-time** partition: an object under
+`hour=14/` routinely holds events from 13:55, because that is when the buffer
+opened. Anything reading that path as event time is wrong at every hour
+boundary, silently.
+
+That is why "the event timestamp must travel inside the payload" was
+non-negotiable, and it is enforced in two places: the producer never strips
+Binance's `E`/`T` and adds `_ingested_at`, and the Silver job derives
+`event_time_utc` from the payload and re-partitions Silver on it.
+
+Dynamic partitioning *could* have fixed the skew, via `partitionKeyFromQuery`
+on the payload's own timestamp — the one thing it genuinely buys. Rejected
+anyway: Silver re-partitions on event time regardless, so the fix would have
+been paid for twice and used once.
+
+---
+
+### Silver: a second job, not a rewrite of the first
+
+`data_sources.md` §10 had already settled that **Silver stays source-separated
+and the join happens in Gold**, so the Binance stream gets its own job rather
+than a set of shape branches inside the CoinMarketCap one. A Binance frame
+shares not one field with a CMC `quotes/latest` document; merging them would
+mean a CoinMarketCap schema change can break the stream.
+
+`glue_jobs_silver_gold/silver/silver_binance_job.py` writes **two** datasets,
+because the stream carries two grains and flattening them would mean either
+nulls in two thirds of every row or a fabricated join key:
+
+| Dataset | Grain | Dedup key |
+|---|---|---|
+| `silver/binance/trades/dt=…/hour=…/` | one row per `@aggTrade` | `(symbol, agg_trade_id)` |
+| `silver/binance/klines/dt=…/hour=…/` | one row per 1-minute bar | `(symbol, open_time_utc)` |
+
+Three details worth naming:
+
+- **The wire schema is declared, not inferred.** The two event types share only
+  four top-level fields, so an inferred schema depends on which rows Spark
+  happens to sample — a quiet hour with no klines would produce a *different*
+  schema from a busy one.
+- **Decimals are cast from Binance's strings, never from inferred floats.**
+  Prices span eight orders of magnitude here (BTC ~1e5, SHIB ~1e-5).
+- **Kline dedup prefers a closed bar over an open one.** A 1-minute bar is
+  re-sent every ~2 seconds while it is open, so the same bar arrives ~30 times,
+  each more complete. That is the normal path, not an error path.
+
+The CMC Silver job is **untouched** — its output schema, including its
+`y/m/d/h` partition columns, is exactly what it was.
+
+### Catalog: the crawler is gone, and Terraform owns the tables
+
+Gold already used partition projection with hand-run DDL. Copying that pattern
+for Silver would have made this phase a **regression in automation**: a
+Terraform-managed crawler that built the table on every run would be replaced by
+a human remembering to run a `.sql` file. The crawler was the wrong tool, but it
+was automated. So the three Silver tables are `aws_glue_catalog_table`
+resources, and harmonising Gold's three `.sql` files with them is in the backlog.
+
+Deleted with the crawler: its IAM role, the inline least-privilege policy, and
+the `AWSGlueServiceRole` attachment that granted `glue:*` on `"*"` and made that
+scoping cosmetic — a caveat Phase 3 recorded honestly and Phase 6 closes.
+
+### Step Functions
+
+- **Four states gone** — `StartCrawler` → `Wait 180s` → `GetCrawler` → `Choice`
+  — and with them ~3 minutes per run and a `Default` branch that sent any
+  unexpected crawler state back to `Wait`, i.e. **looped forever on a failed
+  crawl**.
+- **`Catch` added to every task**, routing to one `NotifyFailure` state that
+  publishes to SNS. The trick that lets a single shared state name the failed
+  step is the `ResultPath` on each catcher: each writes into
+  `$.failure.<ThatStateName>`, so the serialised object's only key *is* the
+  step that died. `$$.State.Name` inside `NotifyFailure` would say
+  "NotifyFailure", and a `Pass` state per task would add five states to save one
+  line.
+- **`NotifyFailure` is followed by a `Fail` state, deliberately**, so the
+  execution still ends `FAILED` and the EventBridge rule keeps firing as a
+  backstop — a `Catch` cannot see an `ABORTED` execution, a machine-level
+  `TIMED_OUT`, or a failure of the SNS publish itself. The price is two emails
+  on an ordinary failure. That is the right way round: a duplicate alert costs a
+  delete, a missing one costs the incident.
+- **`SilverBinanceJob` joined the chain**, ahead of Gold. No Gold job reads it
+  yet; Phase 7's feature work does, and a Silver failure should stop the run
+  rather than let Gold build on a layer that did not refresh.
+
+### The two names that lied
+
+Backlog item, approved for this phase on 2026-09-01, and done here because
+`name` is ForceNew on both and both resources are DISABLED, so this is the cheap
+moment:
+
+| Was | Now | Why it lied |
+|---|---|---|
+| `fetch-top10-crypto-crypto` | `cmc-extractor-crypto` | never 10 assets (11, then 50); "crypto" twice |
+| `schedule-fetch-top10-5-min-bronze-crypto` | `schedule-cmc-extractor-crypto` | not 10, not 5-minute (hourly since Phase 5), and "bronze" is already implied |
+
+The cadence is deliberately **not** in the new name: `schedule_expression` is a
+variable, and a name repeating a variable's value is a second copy that cannot
+be kept in sync. **This is why Phase 6's plan is not 0-destroyed, and that is
+expected, not drift.**
 
 **DoD**
-- [ ] Firehose partitioning option chosen, with the cost trade-off documented
-- [ ] Silver job reads the new bronze layout; output schema unchanged
-- [ ] Event timestamp present inside the payload
-- [ ] Silver migrated to partition projection; Silver crawler deleted
-- [ ] Crawler polling states removed from the state machine
-- [ ] `Catch` → `NotifyFailure` added, alert names the failed state
-- [ ] Athena queries return the same results as before the migration
+- [x] Firehose partitioning option chosen, with the cost trade-off documented
+- [x] Silver job reads the new bronze layout; CMC output schema unchanged
+- [x] Event timestamp present inside the payload, and read from there
+- [x] Silver migrated to partition projection; Silver crawler deleted
+- [x] Crawler polling states removed from the state machine
+- [x] `Catch` → `NotifyFailure` added, alert names the failed state
+- [ ] **Athena queries return the same results as before the migration** —
+      cannot be closed here and is not pretended otherwise. The lake is empty
+      (Phase 2.1 deleted it) and the pipeline is dormant, so there is no
+      "before" to compare against. The check itself is written down in
+      `sql/athena_verification_silver_phase6.sql` and runs at the wake-up.
+
+**Applied 2026-09-06: 10 added, 4 changed, 10 destroyed**, and
+`terraform plan -detailed-exitcode` returns 0 afterwards.
+
+It was *written* with no credentials reachable in the working shell, so the
+static checks carried the weight until Angel ran it: `fmt -check -recursive`,
+`validate`, a reachability and dangling-transition check over the state machine
+JSON rendered from the real `locals` block, and a compile of the new Glue job.
+Every one of those held; the apply matched the predicted categories exactly.
+
+Verified after the apply, in this order: the three Silver tables exist with
+`projection.enabled = true`, `GetCrawler` returns `EntityNotFoundException`, the
+deployed state machine definition contains `NotifyFailure` and
+`SilverBinanceJob` and none of the three crawler states, and — the one that
+matters most — **the project is still asleep**: all three EventBridge rules
+`DISABLED`, `list-streams` empty, producer at `desired_count = 0`.
+
+**One thing to expect at the wake-up.** The first scheduled run after
+`streaming_enabled` is flipped can fail on `SilverBinanceJob` with a
+"Path does not exist" — Firehose has not flushed its first 5-minute buffer yet,
+so `bronze/binance/` has never been written. It is a one-off; re-run the
+execution. The job deliberately does not swallow it: a `try/except` there would
+also hide a genuine unreadable-Bronze failure on every day after the first.
+
+**One-time step before the first apply — needed, and done.** The deleted
+crawler had left its table in `crypto_silver_db` with the prefix `silver_`.
+Terraform will not adopt an existing table, so it had to be dropped by hand
+first or the apply would have failed with `AlreadyExistsException` — which the
+`plan` does not catch, because the collision only exists at create time. It was
+a schema with no data behind it (Phase 2.1 deleted the lake), so this cost
+nothing. Kept here because a future rebuild from scratch will not hit it, and
+someone re-reading this should know why the step existed:
+
+```bash
+aws glue get-tables --database-name crypto_silver_db --query 'TableList[].Name'
+aws glue delete-table --database-name crypto_silver_db --name <orphan>
+```
 
 **Prompt to run**
 
@@ -1420,7 +1590,7 @@ phase. Each is tagged with where it gets resolved.
 | **Silver and Gold share one bucket** | Phase 2.1 ✅ | Forces lifecycle rules and IAM to be built on prefix filters instead of bucket ARNs |
 | **Artifacts bucket is named `artifacts-crypto-data-crypto`** | Phase 2.1 ✅ | Names are immutable, so the fix is a new bucket under the `<env>-<purpose>-<account>` convention |
 | Prefix-filtered lifecycle rules break silently on a rename | Phase 2.1 ✅ | `top10/silver/` and `top10/gold/` filters would stop matching with no error |
-| Glue crawler S3 target is immutable under `CRAWL_NEW_FOLDERS_ONLY` | Phase 2.1 ✅ | Any future target change needs `-replace`, not an update. Moot once Phase 6 deletes the crawler |
+| Glue crawler S3 target is immutable under `CRAWL_NEW_FOLDERS_ONLY` | Phase 2.1 ✅ → Phase 6 ✅ | Any future target change needed `-replace`, not an update. Moot now: Phase 6 deleted the crawler |
 | **Delete the current lake data — deliberate clean slate** | Phase 2.1 ✅ | Incomplete series, provisional 11-asset list, polling-era design. Angel's call: start from zero rather than migrate |
 | Unused `gold_spark_ui_prefix` variable | Phase 2.1 ✅ | Deleted there; its orphaned comment was swept in Phase 3 ✅ |
 | Curate the final 50-asset list | Phase 4 ✅ | Frozen in `config/tracked_assets.json`: 50 ids across 10 behavioural cohorts, 45 with a Binance USDT pair, 5 CMC-only. BAT (`1697`) dropped from the provisional 11 |
@@ -1430,18 +1600,22 @@ phase. Each is tagged with where it gets resolved.
 | Batch producer writes to ~5 KB records | Phase 5 | Kinesis on-demand rounds every record up to 1 KB and the frames are 146–360 bytes, so one-record-per-event bills ~4× the bytes actually sent |
 | **Producer hosting: Fargate 24/7 vs time-boxed vs Lambda polling** | Phase 5 | ⚠️ Open decision, Angel's call. First recurring cost in the project — not to be defaulted into |
 | **The producer image has never been built; ECR is empty** | Phase 12 | Phase 5's task definition pulls `:latest` from `crypto-binance-producer-crypto` and nothing has ever been pushed there, so `streaming_enabled = true` would fail with `CannotPullContainerError`. Deferred deliberately — Phase 12's GitHub Actions pipeline builds that image anyway — but it is a **wake-up precondition**, not a nice-to-have. `producer/Dockerfile` has also never been executed, which is the same unvalidated-code risk Phase 5 rejected elsewhere |
-| **Two deployed names now lie, and Phase 5 made it worse** | Phase 6 — **approved 2026-09-01** | The EventBridge rule is `schedule-fetch-top10-5-min-bronze-crypto` and the Lambda is `fetch-top10-crypto-crypto`. Neither was ever accurate — the list was 11, not 10 — and Phase 5 made both wrong twice over: 50 assets, hourly. `name` is ForceNew on both, so fixing them is a destroy+create. Deliberately NOT done in Phase 5, to keep its plan at **0 destroyed**; Phase 6 already touches this surface and both resources are DISABLED, so it is the cheap moment. The same reasoning Phase 3 used to rename the EventBridge `target_id`. Angel approved the rename for Phase 6, so that phase's plan will NOT be 0-destroyed and that is expected, not drift |
+| **Two deployed names now lie, and Phase 5 made it worse** | Phase 6 ✅ | The EventBridge rule is `schedule-fetch-top10-5-min-bronze-crypto` and the Lambda is `fetch-top10-crypto-crypto`. Neither was ever accurate — the list was 11, not 10 — and Phase 5 made both wrong twice over: 50 assets, hourly. `name` is ForceNew on both, so fixing them is a destroy+create. Deliberately NOT done in Phase 5, to keep its plan at **0 destroyed**; Phase 6 already touches this surface and both resources are DISABLED, so it is the cheap moment. The same reasoning Phase 3 used to rename the EventBridge `target_id`. Angel approved the rename for Phase 6, so that phase's plan is NOT 0-destroyed and that is expected, not drift. **Done:** now `cmc-extractor-crypto` and `schedule-cmc-extractor-crypto`. The cadence is deliberately absent from the new name — `schedule_expression` is a variable, and a name repeating a variable's value is a second copy that cannot be kept in sync |
 | **Backfill the Binance kline archive from 2017** | Phase 7 | Free at `data.binance.vision`, no key: 3,135 asset-months, ~133M 1-minute candles, ~4.4 GB, $0, and it bypasses Kinesis. Reaches 2017-07 (Binance's own start), not 13 years. Use klines, never aggTrades — one month of BTCUSDT aggTrades is 362 MB against 2.1 MB for klines |
 | Resample the stream to 1-minute bars in Gold to meet the backfill | Phase 7 | The archive and the live `@kline_1m` event are the same twelve fields from the same exchange, so the stitch is exact. Carry `source ∈ {backfill, stream}` and validate on the overlap |
 | Stitch pre-rename tickers when backfilling | Phase 7 | `RNDRUSDT` holds 33 months RENDER does not; `MATICUSDT` holds 66 months POL does not. `binance_symbol_aliases` in `config/tracked_assets.json` exists for this |
 | Layer the feature schema by data availability | Phase 7 | 1-minute OHLCV features span 2017→now; tick-derived features start at Phase 5. One flat schema would be mostly null where it matters |
 | Optional: BTC-quoted pairs for pre-2019 depth | Phase 7 | `ZECBTC`, `LINKBTC`, `XMRBTC` reach 16 months further than their USDT pairs. Needs a synthetic USD series (`price_btc × BTCUSDT`), so flag provenance and never mix it in silently |
-| Firehose partitioning: dynamic vs native prefix | Phase 6 | Deep analysis required; affects Silver and cost |
+| Firehose partitioning: dynamic vs native prefix | Phase 6 ✅ | **Native prefix.** The premise was wrong — `!{timestamp:...}` works in a plain prefix with no surcharge, so Phase 5 had already written the free Hive layout. Dynamic partitioning would have added ~$4.80/mo (+38%) for a `symbol=` level that is already a payload field, and it is a one-way door: enable-at-creation only, never disableable. Full numbers in `modules/ingestion/streaming.tf` |
+| Gold's tables are hand-run DDL; Silver's are Terraform | Phase 7 | Phase 6 made the three Silver tables `aws_glue_catalog_table` resources rather than adding to `sql/athena_projections_*.sql`, because replacing an automated crawler with a manual DDL step would have been a regression in automation. That leaves two mechanisms in one catalog. Phase 7 already rewrites the Gold jobs, so it is the cheap moment to move their three `.sql` files across |
+| Widen `streaming_projection_start_date` when the backfill lands | Phase 7 | Defaults to `2026-09-01`. A row written OUTSIDE a projected `dt` range is INVISIBLE to Athena rather than an error, so the 2017 backfill must widen this in the SAME change that writes those rows, or it will look like the backfill silently did nothing |
+| The daily trigger may be the wrong grain over a stream | Phase 7 | Phase 6 left the state machine daily and added `SilverBinanceJob` to the chain. A stream feeding a once-a-day batch is a cadence question Phase 7 inherits, not a defect |
+| Phase 6 was written without AWS credentials | Phase 6 ✅ | Static checks only while writing it — `fmt`, `validate`, an ASL reachability check, a Python compile. Angel applied it on 2026-09-06 and the plan matched the predicted categories: 10 added, 4 changed, 10 destroyed, clean plan afterwards. The orphan Silver table did exist and had to be dropped first |
 | SNS topic policy blocks `cloudwatch.amazonaws.com` | Phase 11 | Alarms would fail silently |
 | Split SNS into ops vs signals topics | Phase 11 | |
 | Review the email subscription channel | Phase 11 | Slack webhook demos better |
-| Step Functions has no `Catch` anywhere | Phase 6 | Alerts cannot say which step failed |
-| Remove the crawler polling states | Phase 6 | Depends on Silver projection migration |
+| Step Functions has no `Catch` anywhere | Phase 6 ✅ | Every task catches to one `NotifyFailure` → SNS → `Fail`. Each catcher's `ResultPath` is `$.failure.<StateName>`, so the alert's JSON key IS the step that died |
+| Remove the crawler polling states | Phase 6 ✅ | Four states and ~3 min/run gone, plus a `Default` branch that looped forever on a FAILED crawl |
 | Split into two state machines | Phase 13 | Before the feedback loop makes it unreadable |
 | All 3 EventBridge rules are DISABLED in AWS | Phase 5 | Intentional — project is dormant. Re-enable only once Phase 3 and Phase 5 are both done. **Phase 3 is now done**, so Phase 5 is the only remaining precondition |
 | The neighbour `loteria-pipeline` project | after Phase 12 | Apply the container pattern there once internalised |

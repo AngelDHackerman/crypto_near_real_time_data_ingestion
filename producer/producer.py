@@ -411,6 +411,14 @@ def _handle(raw: str | bytes, batcher: SymbolBatcher, stats: Stats) -> None:
     # touched -- but the gap between Binance's event time and ours is the only
     # measure of producer lag that survives into the lake, and it cannot be
     # reconstructed later.
+    #
+    # NOTHING HERE MAY EVER STRIP `E` OR `T`. That became load-bearing in Phase
+    # 6: Firehose partitions Bronze by the ARRIVAL time of the object it happens
+    # to be writing, not by event time, so an object under `hour=14/` routinely
+    # holds events from 13:55. The timestamps inside this payload are therefore
+    # the ONLY correct answer to "when did this happen", and the Silver job
+    # reads them rather than the S3 path. See the decision block in
+    # terraform/modules/ingestion/streaming.tf.
     data["_ingested_at"] = int(time.time() * 1000)
     data["_stream"] = msg.get("stream")
 

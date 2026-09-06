@@ -86,10 +86,72 @@ resource "aws_kinesis_firehose_delivery_stream" "binance_to_bronze" {
     # Top level inside a lake bucket is the SOURCE, never the layer -- the
     # bucket already names the layer. Same rule Phase 2.1 applied to `cmc/`.
     #
-    # The !{timestamp:...} expressions are evaluated by Firehose, not Terraform;
-    # $${...} escapes the interpolation so Terraform passes them through
-    # literally. Hive-style key=value so a future Glue/Athena partition
-    # projection reads them without a crawler -- which Phase 6 retires.
+    # The !{timestamp:...} expressions are evaluated by Firehose at delivery
+    # time, not by Terraform. No escaping is needed: `!{` is not an
+    # interpolation sequence in HCL, only `${` is.
+    #
+    # =========================================================================
+    # PHASE 6 DECISION: NATIVE PREFIX, NOT DYNAMIC PARTITIONING. Verified
+    # against the AWS docs and pricing on 2026-09-05; the numbers are below so
+    # the choice can be re-checked rather than believed.
+    #
+    # The premise Phase 6 was written on was WRONG. It assumed Firehose can
+    # only write `YYYY/MM/DD/HH/` unless dynamic partitioning is switched on.
+    # It cannot: the `timestamp` namespace works in a plain prefix, with no
+    # dynamic partitioning and no surcharge, and AWS's own documentation shows
+    # this exact Hive-style form as an example. So there was never a trade-off
+    # between "Hive layout" and "free" -- only between "partition by symbol"
+    # and "free". Phase 5 already wrote the free one.
+    #
+    # What dynamic partitioning would have added is a `symbol=` level, priced
+    # at measured volume (47 GB/month, 45 symbols -- data_sources.md section 9):
+    #
+    #   $0.020/GB processed                47 GB      = $0.94/mo
+    #   $0.005 per 1,000 objects delivered 388,800    = $1.94/mo
+    #   S3 PUT on those same objects                  = $1.94/mo
+    #   $0.07 per JQ processing hour       unit is genuinely ambiguous in AWS's
+    #                                      own docs; worst case (wall clock)
+    #                                      $51/mo, best case ~$0
+    #
+    # ~$4.80/month before JQ, on a $12.62/month ingestion path -- +38% -- to
+    # buy a path component that is ALREADY A FIELD IN EVERY PAYLOAD (`s`).
+    #
+    # Three reasons beyond the money, any one of which is decisive:
+    #
+    #   1. IT IS A ONE-WAY DOOR. Dynamic partitioning can only be enabled when
+    #      a Firehose stream is CREATED, and once enabled it can never be
+    #      disabled. Wrong here means destroy and recreate.
+    #   2. IT WOULD MULTIPLY THE OBJECT COUNT BY 45. Each symbol gets its own
+    #      buffer, so 288 objects/day of ~1 MB becomes 12,960/day of ~24 KB.
+    #      That is precisely the small-file problem the 300 s buffer below was
+    #      chosen to avoid, reintroduced at 45x. The daily Silver job would
+    #      open 12,960 objects to read the same bytes.
+    #   3. OUR RECORDS ARE AGGREGATED. The producer batches ~15-35 events into
+    #      one newline-delimited Kinesis record, so dynamic partitioning would
+    #      additionally need multi-record deaggregation -- another mode to
+    #      configure and another place data can be dropped silently.
+    #
+    # WHAT THIS CHOICE COSTS, STATED RATHER THAN HIDDEN. `!{timestamp:...}`
+    # evaluates to the APPROXIMATE ARRIVAL TIMESTAMP OF THE OLDEST RECORD in
+    # the object being written -- NOT the event time. So `year=/month=/day=/
+    # hour=` below is an ARRIVAL-time partition: an object under `hour=14/`
+    # can legitimately contain events from 13:55, because the buffer opened
+    # then. Anything that reads this path as event time is wrong at every
+    # hour boundary, silently.
+    #
+    # Two things follow, and both are enforced elsewhere:
+    #   - The event timestamp travels INSIDE the payload. Binance sends `E`
+    #     (event time) and `T` (trade time) on every frame and the producer
+    #     adds `_ingested_at`; producer.py never strips them.
+    #   - Silver derives event_time_utc from the payload and re-partitions on
+    #     it. Nothing downstream reads this prefix as time; it is a pruning
+    #     hint for the reader and a bucketing scheme for S3, nothing more.
+    #
+    # Dynamic partitioning COULD have fixed that, via partitionKeyFromQuery on
+    # the payload's own timestamp -- that is the one thing it genuinely buys.
+    # Rejected anyway: Silver re-partitions on event time regardless, so the
+    # fix would be paid for twice and used once.
+    # =========================================================================
     prefix              = "${var.bronze_streaming_prefix}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/"
     error_output_prefix = "${var.bronze_streaming_prefix}_errors/!{firehose:error-output-type}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/"
 

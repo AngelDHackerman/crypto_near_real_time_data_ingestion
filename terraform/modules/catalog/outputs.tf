@@ -8,9 +8,17 @@ output "gold_database_name" {
   value       = aws_glue_catalog_database.gold_db.name
 }
 
-output "silver_crawler_name" {
-  description = "Name of the Silver crawler. The state machine starts it by name; Phase 6 deletes it once Silver moves to partition projection."
-  value       = aws_glue_crawler.silver_crawler.name
+# Phase 6 deleted `silver_crawler_name`. Nothing starts a crawler any more: the
+# Silver tables below are partition-projected, so they are queryable the moment
+# Spark writes a partition.
+
+output "silver_table_names" {
+  description = "The three partition-projected Silver tables, in the order Bronze produces them: CoinMarketCap, then the two Binance stream datasets."
+  value = [
+    aws_glue_catalog_table.silver_cmc.name,
+    aws_glue_catalog_table.silver_binance_trades.name,
+    aws_glue_catalog_table.silver_binance_klines.name,
+  ]
 }
 
 output "athena_workgroup_name" {

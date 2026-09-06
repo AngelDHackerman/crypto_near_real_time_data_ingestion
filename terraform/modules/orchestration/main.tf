@@ -1,135 +1,143 @@
 # =============================================================================
-# Orchestration module -- Step Functions + its daily trigger  (roadmap.md, Phase 3)
+# Orchestration module -- Step Functions + its daily trigger  (roadmap.md,
+# Phase 3; rebuilt in Phase 6)
 #
-# One state machine chains the four Glue jobs and then refreshes the Silver
-# catalog. The StartCrawler / Wait / GetCrawler / Choice polling loop at the end
-# exists only because Silver still depends on a crawler; Phase 6 migrates Silver
-# to partition projection and those four states go away with it.
+# One state machine chains the Silver jobs and then the three Gold jobs.
 #
-# Known gap, recorded rather than fixed here: there is no `Catch` anywhere. On
-# failure the execution dies and the EventBridge rule in modules/observability/
-# fires SNS -- which works, but the alert cannot name the step that failed.
-# Phase 6 adds the Catch and a NotifyFailure state.
+# WHAT PHASE 6 REMOVED. The machine used to end with StartCrawler -> Wait 180s
+# -> GetCrawler -> Choice, a hand-rolled polling loop that existed only because
+# the Silver table was built by a crawler. Silver is partition-projected now
+# (modules/catalog/main.tf), so the table is queryable the moment Spark writes a
+# partition. Four states, ~3 minutes per run and one crawler's cost, all gone --
+# and with them a `Default` branch that sent any unexpected crawler state back
+# to Wait, i.e. looped forever on a FAILED crawl.
 #
-# The Glue job and crawler names arrive as inputs from module.processing and
-# module.catalog rather than from tfvars: the resource that creates a name is
-# the only thing allowed to own it (Phase 2.1's rule, applied beyond buckets).
+# WHAT PHASE 6 ADDED, AND WHY IT IS SHAPED THIS WAY. There was no `Catch`
+# anywhere: retries were `States.ALL x 3` and nothing else, so a failure killed
+# the execution and the EventBridge rule in modules/observability/ sent an email
+# that could not say WHICH step died. Every task now catches to a single
+# NotifyFailure state.
+#
+# The trick that makes one shared NotifyFailure able to name the failed step is
+# the ResultPath on each Catch: each writes into `$.failure.<ThatStateName>`.
+# The alert then serialises `$.failure`, and the object's only key IS the state
+# that failed. The obvious alternatives are worse -- `$$.State.Name` inside
+# NotifyFailure evaluates to "NotifyFailure", and a per-task Pass state to
+# stamp the name would add five states to save one line.
+#
+# NotifyFailure is followed by a `Fail` state, deliberately. The execution must
+# still end FAILED so the EventBridge rule keeps firing as a BACKSTOP: a Catch
+# cannot see an execution a human ABORTED, a machine-level TIMED_OUT, or a
+# failure of the SNS publish itself. The price is two emails on an ordinary
+# failure -- one detailed, one generic. That is the right way round: a duplicate
+# alert costs a delete, a missing one costs the incident. Phase 11 owns tidying
+# it when it splits the topic.
+#
+# The Glue job names arrive as inputs from module.processing rather than from
+# tfvars: the resource that creates a name is the only thing allowed to own it
+# (Phase 2.1's rule, applied beyond buckets). The SNS topic ARN arrives the same
+# way, from module.observability.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # The daily Gold pipeline state machine
 # -----------------------------------------------------------------------------
 locals {
+  # Retry policy shared by every Glue task. It was already identical on all of
+  # them and copied five times; written once, it is now one thing to change.
+  #
+  # Retry and Catch are not alternatives, they compose: Step Functions exhausts
+  # the retries first and only then hands the error to the Catch. So this is
+  # "three attempts at 10s, 20s, 40s" and the alert only fires after all three.
+  glue_retry = [{
+    ErrorEquals     = ["States.ALL"]
+    IntervalSeconds = 10
+    BackoffRate     = 2.0
+    MaxAttempts     = 3
+  }]
+
+  # A Glue job step, built once so the five below cannot drift apart.
+  #
+  # ResultPath = null discards the Glue task's output and passes the state's
+  # INPUT through unchanged. That is load-bearing, not tidiness: without it each
+  # task would replace the whole state document with its own JobRun result, and
+  # the `$.failure.<state>` an earlier Catch wrote would be gone by the time
+  # NotifyFailure looked for it.
+  glue_step = {
+    for step in [
+      { name = "SilverCmcJob", job = var.silver_job_name, next = "SilverBinanceJob" },
+      { name = "SilverBinanceJob", job = var.silver_binance_job_name, next = "GoldFeaturesBaseJob" },
+      { name = "GoldFeaturesBaseJob", job = var.gold_features_job_name, next = "GoldOHLCJob" },
+      { name = "GoldOHLCJob", job = var.gold_ohlc_job_name, next = "GoldMLTrainingJob" },
+      { name = "GoldMLTrainingJob", job = var.gold_ml_job_name, next = "Success" },
+      ] : step.name => {
+      Type       = "Task"
+      Resource   = "arn:aws:states:::glue:startJobRun.sync"
+      Parameters = { JobName = step.job }
+      Retry      = local.glue_retry
+      ResultPath = null
+      Catch = [{
+        ErrorEquals = ["States.ALL"]
+        # The state's own name, used as a KEY. This is what lets one shared
+        # NotifyFailure report which step died.
+        ResultPath = "$.failure.${step.name}"
+        Next       = "NotifyFailure"
+      }]
+      Next = step.next
+    }
+  }
+
   sfn_definition = jsonencode({
-    Comment = "Daily Gold Pipeline for Crypto (Silver -> Gold Features -> Gold OHLC -> Gold ML -> Silver Crawler)"
-    StartAt = "SilverJob"
-    States = {
-      SilverJob = {
-        Type       = "Task"
-        Resource   = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = { JobName = var.silver_job_name }
-        Retry = [{
-          ErrorEquals     = ["States.ALL"]
-          IntervalSeconds = 10
-          BackoffRate     = 2.0
-          MaxAttempts     = 3
-        }]
-        Next = "GoldFeaturesBaseJob"
-      }
+    Comment = "Daily crypto pipeline: Silver (CMC + Binance stream) -> Gold features -> Gold OHLC -> Gold ML"
+    StartAt = "SilverCmcJob"
+    States = merge(local.glue_step, {
 
-      GoldFeaturesBaseJob = {
-        Type       = "Task"
-        Resource   = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = { JobName = var.gold_features_job_name }
-        Retry = [{
-          ErrorEquals     = ["States.ALL"]
-          IntervalSeconds = 10
-          BackoffRate     = 2.0
-          MaxAttempts     = 3
-        }]
-        Next = "GoldOHLCJob"
-      }
+      # SilverBinanceJob sits in the chain rather than beside it, even though no
+      # Gold job reads its output yet. Two reasons: Phase 7's feature work reads
+      # exactly this table, so the dependency is arriving, and a failure in a
+      # Silver job should stop the run and alert rather than let Gold quietly
+      # build on a layer that did not refresh. Phase 7 revisits the cadence of
+      # this machine anyway -- a daily trigger over a live stream is the open
+      # question it inherits.
 
-      GoldOHLCJob = {
-        Type       = "Task"
-        Resource   = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = { JobName = var.gold_ohlc_job_name }
-        Retry = [{
-          ErrorEquals     = ["States.ALL"]
-          IntervalSeconds = 10
-          BackoffRate     = 2.0
-          MaxAttempts     = 3
-        }]
-        Next = "GoldMLTrainingJob"
-      }
-
-      GoldMLTrainingJob = {
-        Type       = "Task"
-        Resource   = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = { JobName = var.gold_ml_job_name }
-        Retry = [{
-          ErrorEquals     = ["States.ALL"]
-          IntervalSeconds = 10
-          BackoffRate     = 2.0
-          MaxAttempts     = 3
-        }]
-        Next = "StartCrawler"
-      }
-
-      StartCrawler = {
-        Type       = "Task"
-        Resource   = "arn:aws:states:::aws-sdk:glue:startCrawler"
-        Parameters = { Name = var.silver_crawler_name }
-        Retry = [
-          {
-            # Retry only on specific known transient Glue/Throttle errors
-            ErrorEquals     = ["ThrottlingException", "Glue.CrawlerRunningException"]
-            IntervalSeconds = 15
-            BackoffRate     = 2.0
-            MaxAttempts     = 5
-          },
-          {
-            # Catch-all retry must be in its own block with States.ALL alone
-            ErrorEquals     = ["States.ALL"]
-            IntervalSeconds = 15
-            BackoffRate     = 2.0
-            MaxAttempts     = 3
-          }
-        ]
-        Next = "WaitCrawler"
-      }
-
-      WaitCrawler = {
-        Type    = "Wait"
-        Seconds = 180
-        Next    = "GetCrawler"
-      }
-
-      GetCrawler = {
-        Type       = "Task"
-        Resource   = "arn:aws:states:::aws-sdk:glue:getCrawler"
-        Parameters = { Name = var.silver_crawler_name }
-        ResultSelector = {
-          # State.$ creates $.State from the JSON path $.Crawler.State returned by the task
-          "State.$" = "$.Crawler.State"
+      NotifyFailure = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::sns:publish"
+        Parameters = {
+          TopicArn = var.sns_topic_arn
+          # SNS subjects are capped at 100 ASCII characters and may not contain
+          # newlines, so the detail goes in the body, not here.
+          Subject = "Crypto daily pipeline FAILED"
+          # The single key of the serialised object is the failed state's name.
+          #
+          # ONE LINE, NO NEWLINES IN THE FORMAT STRING. States.Format's literal
+          # is parsed by Step Functions out of this JSON string, and its
+          # grammar only documents escapes for quote, brace and backslash --
+          # what it does with a raw newline is unspecified. An unspecified
+          # thing in the ALERT path is the wrong place to find out, so the
+          # message is readable on one line instead of pretty on four.
+          "Message.$" = "States.Format('The daily crypto pipeline FAILED. Execution: {} on state machine {}. Failed step and error follow as JSON, where the key names the step: {}', $$.Execution.Name, $$.StateMachine.Name, States.JsonToString($.failure))"
         }
-        Next = "CrawlerDoneChoice"
+        ResultPath = null
+        # If SNS itself is the thing that is broken, do not lose the failure on
+        # top of it: fall through to the Fail state so the execution still ends
+        # FAILED and the EventBridge backstop still fires.
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.failure.NotifyFailure"
+          Next        = "PipelineFailed"
+        }]
+        Next = "PipelineFailed"
       }
 
-      CrawlerDoneChoice = {
-        Type = "Choice"
-        Choices = [
-          # if crawler is READY -> success
-          { Variable = "$.State", StringEquals = "READY", Next = "Success" },
-          # if crawler still RUNNING -> poll again
-          { Variable = "$.State", StringEquals = "RUNNING", Next = "WaitCrawler" }
-        ]
-        # default: if other unexpected state -> go to WaitCrawler (or consider Fail)
-        Default = "WaitCrawler"
+      PipelineFailed = {
+        Type  = "Fail"
+        Error = "PipelineFailed"
+        Cause = "A step of the daily crypto pipeline failed. See the SNS alert, or $.failure in the execution history, for which one."
       }
 
       Success = { Type = "Succeed" }
-    }
+    })
   })
 }
 
@@ -194,20 +202,33 @@ data "aws_iam_policy_document" "sfn_policy" {
     ]
     resources = [
       "${local.glue_arn_prefix}:job/${var.silver_job_name}",
+      "${local.glue_arn_prefix}:job/${var.silver_binance_job_name}",
       "${local.glue_arn_prefix}:job/${var.gold_features_job_name}",
       "${local.glue_arn_prefix}:job/${var.gold_ohlc_job_name}",
       "${local.glue_arn_prefix}:job/${var.gold_ml_job_name}",
     ]
   }
 
+  # Phase 6 deleted the "Crawler" statement -- glue:StartCrawler and
+  # glue:GetCrawler on the one crawler ARN -- along with the crawler itself.
+
+  # NotifyFailure publishes here. Note what is NOT needed alongside it: a
+  # matching statement on the topic's own resource policy.
+  #
+  # That policy allows only events.amazonaws.com, and the header of
+  # modules/observability/main.tf records that a CloudWatch alarm publishing to
+  # this topic would fail SILENTLY because of it. Both are true, and they are
+  # not in tension. A CloudWatch alarm publishes as a SERVICE principal, which
+  # has no identity policy, so the resource policy is the only thing that can
+  # allow it. Step Functions publishes as THIS ROLE, and for a principal in the
+  # same account as the resource an allow in the identity policy is sufficient
+  # on its own. So Phase 6 does not need to touch a policy Phase 11 is about to
+  # rewrite.
   statement {
-    sid    = "Crawler"
-    effect = "Allow"
-    actions = [
-      "glue:StartCrawler",
-      "glue:GetCrawler"
-    ]
-    resources = ["${local.glue_arn_prefix}:crawler/${var.silver_crawler_name}"]
+    sid       = "PublishPipelineFailureAlert"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [var.sns_topic_arn]
   }
 
   # Resource = "*" justified, and it is the only one left in this role.
@@ -255,10 +276,27 @@ resource "aws_iam_role_policy_attachment" "sfn_attach" {
 # -----------------------------------------------------------------------------
 # Schedule -- EventBridge -> Step Functions
 # -----------------------------------------------------------------------------
+# THE DORMANCY OF THIS RULE WAS NOT EXPRESSED IN CODE UNTIL PHASE 6, and that
+# was a real gap rather than a tidiness one. The project's standing rule is that
+# every billable path carries a Terraform gate defaulting to off; this rule
+# starts an execution that runs FIVE Glue jobs, which is the most billable thing
+# in the daily pipeline. Its `state` was simply absent, which means AWS decided
+# it and Terraform neither asserted nor read back the answer -- so "the pipeline
+# is dormant" rested on a console fact rather than on this file.
+#
+# `enabled` now says it, defaulting to false, exactly like the extractor's
+# rule_enabled. If this apply shows the rule going ENABLED -> DISABLED, that is
+# this gap closing, not a regression.
+#
+# It is deliberately NOT var.streaming_enabled. That flag gates things that BILL
+# BY EXISTING (a Kinesis shard bills from creation), so it drives `count`. A
+# disabled EventBridge rule is free, so it may exist while switched off -- the
+# same distinction Phase 5 drew between the two kinds of gate.
 resource "aws_cloudwatch_event_rule" "daily_gold_silver" {
   name                = "near-real-time-dialy-gold-silver-${var.environment}"
   schedule_expression = var.daily_schedule_cron
-  description         = "Trigger daily step functions (silver -> Gold -> Crawler)"
+  description         = "Triggers the daily Silver -> Gold pipeline, in env: ${var.environment}"
+  state               = var.daily_schedule_enabled ? "ENABLED" : "DISABLED"
 }
 
 # Permissions to allow EventBridge to StartExecution in SFN
@@ -304,5 +342,13 @@ resource "aws_cloudwatch_event_target" "daily_gold_target" {
   # Was "terraform-20251011222021689700000001". See the note in
   # modules/ingestion/main.tf -- pinned for the Phase 1 import, readable now.
   target_id = "daily-gold-pipeline"
+
+  # An empty object, not the EventBridge scheduled-event envelope. Phase 6 made
+  # the state document meaningful: every Catch writes `$.failure.<state>` into
+  # it and NotifyFailure reads it back, which requires the input to be a JSON
+  # OBJECT. The default envelope is one, so this is belt and braces rather than
+  # a fix -- but it also means the execution history shows the pipeline's own
+  # state instead of thirty lines of EventBridge metadata nothing reads.
+  input = jsonencode({})
 }
 

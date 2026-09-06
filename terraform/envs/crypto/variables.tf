@@ -171,6 +171,47 @@ variable "bronze_streaming_prefix" {
   default     = "binance"
 }
 
+# --- Phase 6 -----------------------------------------------------------------
+variable "silver_streaming_prefix" {
+  description = "Top-level prefix in silver for the Binance stream, alongside \"cmc\". Mirrors bronze_streaming_prefix one layer up. The Silver job writes trades/ and klines/ underneath it."
+  type        = string
+  default     = "binance"
+}
+
+variable "streaming_projection_start_date" {
+  description = <<-EOT
+    Lower bound of the `dt` partition projection on the two Binance Silver
+    tables (yyyy-MM-dd). The upper bound is NOW, so only this end is a setting.
+
+    It is a correctness knob, not cosmetics: a row written OUTSIDE the projected
+    range is invisible to Athena rather than an error. 2026-09-01 is the month
+    the streaming stack was built and there is no data behind it yet, so this is
+    a floor, not a claim about when data starts. Phase 7's 2017 backfill must
+    widen it in the same change that writes those rows.
+  EOT
+  type        = string
+  default     = "2026-09-01"
+}
+
+variable "sfn_daily_schedule_enabled" {
+  description = <<-EOT
+    Whether the daily Silver -> Gold EventBridge rule is ENABLED. False while
+    the project is dormant, which is its default state.
+
+    Added in Phase 6, closing a gap rather than adding a feature: this rule
+    starts an execution that runs five Glue jobs, and its `state` was not set
+    in Terraform at all -- so the fact that it was switched off lived in the
+    AWS console and nowhere in this repository.
+
+    It is a `state` flag and not a `count` gate, on purpose. A DISABLED
+    EventBridge rule is free, so it may exist while off; that is the same
+    distinction Phase 5 drew when `streaming_enabled` had to drive `count`,
+    because a Kinesis shard bills from creation.
+  EOT
+  type        = bool
+  default     = false
+}
+
 # --- Cost guard (Phase 5) ---------------------------------------------------
 variable "monthly_budget_usd" {
   description = "AWS Budgets threshold for the whole account. Set BEFORE the streaming gate is ever opened, so it is already watching rather than being added after a surprise. Deliberately just above the ~$25/month the project costs awake: it should fire on a mistake, not on normal operation."
