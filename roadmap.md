@@ -1285,10 +1285,31 @@ aws glue delete-table --database-name crypto_silver_db --name <orphan>
 **Goal:** compute the technical indicators the model will train on — and first,
 give it something to compute them over.
 
-**Applied:** *pending Angel's apply.* Plan is **16 added, 8 changed, 0
-destroyed**, verified against the live account on 2026-09-06. The project stays
-dormant: both EventBridge rules re-read from AWS after planning are still
+**Applied 2026-09-06, in two passes**, together with Phase 8 -- the two were
+planned as one cumulative **21 added, 9 changed, 0 destroyed**. The project
+stays dormant: both EventBridge rules re-read from AWS after planning are still
 `DISABLED` and `kinesis list-streams` is empty.
+
+**The first pass failed, and the reason was a precondition this phase created
+without writing down.** Three Gold tables came back
+`AlreadyExistsException` -- `gold_features_base`, `gold_ohlc` and
+`gold_ml_training`. Migrating the catalog out of the three hand-run `.sql` files
+did not remove what those files had already produced: the tables were created
+from the Athena console (`last_modified_by = hadoop`) in October 2025 and were
+sitting in Glue the whole time. The plan said `0 destroyed` and was right; what
+it could not say is that three of its creates were adoptions.
+
+**Resolved by importing them, not by deleting them**, with `import {}` blocks --
+the same choice Phase 1 made for 55 addresses, and for the same reason: the
+drift then arrives as a plan a human reads. Second pass: **3 imported, 0 added,
+3 changed, 0 destroyed**, `No changes` afterwards. And the plan is the proof
+this migration was worth doing, because it converged exactly the defects
+described above -- `gold_ohlc`'s asset_id enum went from the provisional
+**eleven** ids to the frozen 50, `gold_features_base` gained the enum it never
+had, and `gold_ml_training`'s partition key moved from `asset_id` to `symbol`.
+Those tables had been wrong in the catalog since October 2025 and nothing had
+reported it, because a mismatched projection returns nothing rather than
+failing.
 
 ---
 
@@ -1521,8 +1542,9 @@ that no longer exists.
 
 **Goal:** the ML core. First place with genuinely delicate IAM.
 
-**Applied:** *pending Angel's apply.* Cumulative plan with Phase 7 is **21
-added, 9 changed, 0 destroyed** — Phase 8's own share is 5 resources and one
+**Applied 2026-09-06** with Phase 7, as one cumulative **21 added, 9 changed, 0
+destroyed** (applied in two passes -- see Phase 7 for the three Gold tables that
+had to be imported rather than created) — Phase 8's own share is 5 resources and one
 lifecycle rule. Nothing here bills anything: an IAM role, an empty ECR
 repository and an S3 lifecycle rule are all free to exist.
 
