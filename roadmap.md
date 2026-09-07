@@ -112,7 +112,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 5 | Streaming ingestion (Kinesis + Firehose + producer) | ✅ Done | `phase-5/streaming-ingestion` [#5] | **Does NOT wake the project.** 19 added, 2 changed, **0 destroyed**, **$0/month** — no Kinesis or Firehose exists behind `streaming_enabled = false`. Producer verified against live Binance locally. Tick-to-S3 check deferred to the wake-up |
 | 6 | Bronze layout, Silver adaptation, catalog cleanup | ✅ Done | `phase-6/bronze-layout-silver-projection` | **10 added, 4 changed, 10 destroyed**, plan clean afterwards. Not 0-destroyed on purpose: 5 of the destroys are the approved rename's ForceNew blast radius, 5 are the crawler and its IAM. Project still dormant — three rules `DISABLED`, no Kinesis stream |
 | 7 | Feature engineering | ✅ Done | `phase-7/feature-engineering` | **16 added, 8 changed, 0 destroyed**. Backfill job rehearsed against the live archive and real S3; indicator maths is one SQL file verified by 13 tests on DuckDB, no Spark needed. `source` promoted to a partition key. Gold catalog migrated out of hand-run DDL, which found an 11-id projection hiding 40 assets. Full 4.4 GB load and the overlap check wait for the apply and the wake-up |
-| 8 | Model training | ⬜ Not started | | Serverless, no VPC |
+| 8 | Model training | ✅ Done | `phase-8/model-training` | 5 resources, all free. XGBoost binary classifier on AWS's managed container, pinned — the ECR repo exists but **nothing references it**, applying Phase 5's lesson rather than repeating it. Purged time split with an embargo, PR-AUC quoted against the positive rate. 16 more tests, no Spark or AWS needed. The run itself and the baseline metric wait for data |
 | 9 | Model registry | ⬜ Not started | | |
 | 10 | Serving / inference | ⬜ Not started | | |
 | 11 | Monitoring & alerting (SNS refactor) | ⬜ Not started | | |
@@ -1517,35 +1517,167 @@ that no longer exists.
 
 ---
 
-## Phase 8 — Model training
+## Phase 8 — Model training ✅
 
 **Goal:** the ML core. First place with genuinely delicate IAM.
 
-**Decided: no VPC.** Putting the training job in a VPC means a NAT Gateway
-(~$32/month plus transfer) or four interface endpoints (~$7/month each for
-ecr.api, ecr.dkr, logs, sts). A training job that only reads S3 does not justify
-it. Knowing *when not to* reach for a VPC is as defensible as knowing how to build
-one — and it will be documented as an explicit decision, not an omission.
+**Applied:** *pending Angel's apply.* Cumulative plan with Phase 7 is **21
+added, 9 changed, 0 destroyed** — Phase 8's own share is 5 resources and one
+lifecycle rule. Nothing here bills anything: an IAM role, an empty ECR
+repository and an S3 lifecycle rule are all free to exist.
 
-**Scope**
+---
 
-- SageMaker Training/Processing jobs over the feature dataset.
-- SageMaker execution role — S3, ECR, CloudWatch Logs, scoped by ARN.
-- `aws_ecr_repository` for the training image, with pinned image versioning
-  consistent with the project's `version = x.y.z` discipline.
-- Trained model artifact stored in S3 with versioning and lifecycle.
+### The target, decided
 
-**Depends on the Phase 7 backfill.** Training on a stream started in Phase 5 means
-training on weeks of data. The 2017-onward archive (`data_sources.md` §11) is what
-makes this phase possible at all.
+Binary classification: **does the forward log return over 60 minutes exceed 20
+bps?** The threshold is a round-trip Binance taker fee before slippage, so the
+positive class means "moved enough to have covered its own costs" rather than
+merely "moved up" — a distinction that decides whether the model is measuring
+anything. Full reasoning in [`feature_schema.md`](./feature_schema.md).
+
+**The baseline metric is PR-AUC, quoted against the positive rate.** Not
+accuracy, and not ROC-AUC. On a minority class, a model that always predicts
+"no signal" scores whatever the negative rate is — 90-something percent — while
+being worth nothing; it is the easiest way to report a good number for a useless
+model. ROC-AUC is better but still flatters imbalance, because the
+false-positive rate has an enormous denominator. Precision-recall uses the
+model's own output as the denominator, which is the quantity that matters.
+
+An absolute PR-AUC is uninterpretable on its own, so every run also records
+`positive_rate` and `lift_over_baseline`. **Phase 13's degradation threshold is
+on the lift, not on the raw score** — the positive rate itself drifts with
+volatility, so a falling PR-AUC can mean a calmer market rather than a worse
+model.
+
+### Decided: no VPC, and here is what that saved
+
+Putting the training job in a VPC costs a NAT Gateway (~$32/month plus transfer)
+or four interface endpoints (ecr.api, ecr.dkr, logs, sts, ~$7/month each — the
+S3 gateway endpoint is the only free one). **Either is roughly the cost of the
+entire awake project**, spent so a job that reads one S3 prefix and writes
+another can avoid a public endpoint.
+
+What it would buy: nothing this workload needs. No private data source, no
+on-premises system, no compliance boundary. The job's only calls are to S3, ECR
+and CloudWatch — AWS services reached over AWS's network with SigV4 either way.
+Data does not traverse the public internet in the sense people mean when they
+ask for a VPC; it traverses AWS's backbone with or without one.
+
+Where a VPC does have a real argument is **Phase 10, serving** — a private
+endpoint only the VPC can reach is a security posture rather than a ritual. The
+project has also already built a VPC, in Phase 5, and also deliberately without
+a NAT Gateway. The pattern is consistent: pay for network isolation where it
+protects something.
+
+### The lesson from Phase 5, applied rather than repeated
+
+Phase 5 created an ECR repository **and** a task definition pulling `:latest`
+from it, then never built the image — which is still the one precondition
+standing between the wake-up flags and a working wake-up.
+
+Phase 8 therefore trains on **AWS's managed XGBoost container**, pinned exactly
+(`683313688378.dkr.ecr.us-east-1.amazonaws.com/sagemaker-xgboost:1.7-1`) like
+every provider version in this repository. The ECR repository asked for by this
+phase's scope **is** created — but **nothing references it**, and that is the
+whole reason it is safe. An empty repository is free and harmless; an empty
+repository that something points at is a time bomb. Phase 12 builds and pushes
+in the same pipeline run, which is the only arrangement where an image and the
+thing that needs it cannot drift apart.
+
+**The tagging scheme, decided now so Phase 12 only implements it:** the
+repository is `IMMUTABLE`, and tags are `<semver>-<git short sha>` — e.g.
+`1.4.2-a3f91c0`. `latest` is never used. A mutable tag means the image behind
+`v1.4.2` can be replaced, so a model's recorded provenance stops being a fact.
+
+### The split is purged, and that is the part most likely to be wrong
+
+A random split of a price series puts minute *t+1* in training and minute *t* in
+validation; the model "predicts" what it has already seen and validation looks
+excellent. So the split is chronological — and **a chronological split is still
+not enough**, because the label looks *forward*. A row at the last minute of
+training is labelled by the following hour, which is the first hour of
+validation: the leak arrives through the labels rather than through the
+features.
+
+The fix is an **embargo** — delete a band at least as wide as the label horizon
+either side of each boundary. Those rows are dropped, not moved, because they
+are the only ones whose outcome spans the cut. At a 60-minute horizon and a
+60-minute stride this costs about ninety rows across 45 assets and two
+boundaries. That is what correctness costs here.
+
+**Verified, not asserted.** `ml/training/splitting.py` holds the split and the
+metric — the two things in a training pipeline that are wrong most often and
+visible least often — with no ML dependencies at all, so
+`tests/test_splitting.py` runs them in under a second with no GPU, container or
+AWS account. **16 tests**, including a negative control that proves a zero
+embargo *does* leak, and a test that an always-no model scores exactly the
+positive rate. Total suite is now **29 tests**.
+
+### Raw price levels are excluded from the features, deliberately
+
+Not "every column except the label". Two exclusion lists, and the second is the
+interesting one: **open/high/low/close, volume, market cap and the moving
+averages are dropped**. BTCUSDT trades near $2,000 in 2017 and near $100,000 in
+2025, so a raw price is a nearly perfect proxy for the **date**. A tree model
+will happily split on it and learn "2021 was a good year" — which validates well
+on any split sharing a regime and predicts nothing. Ratios, returns and z-scores
+carry the same information without the clock, which is what the feature table
+was built to provide.
+
+The ordered feature list is written **beside the model artifact**, not only into
+the metrics. Feature order is part of an XGBoost model's interface, and a
+serving path that guesses it produces confident nonsense rather than an error.
+
+### Terraform owns the durable half only
+
+There is no `aws_sagemaker_training_job`, and there should not be. A training
+job is an **execution**: it starts, produces an artifact, ends. "This job has
+run" is not a state you converge on, and modelling it as one means an apply
+either recreates it forever or never again. So Terraform owns the role, the
+repository and the output locations; `ml/training/launch_training.py` owns the
+run. The same boundary Phase 7 drew around the backfill.
+
+The launcher uses **boto3 and not the SageMaker SDK** — about twenty more lines,
+one less dependency whose version resolution has silently changed the chosen
+image for people before, and an image URI that is pinned rather than
+`retrieve()`d.
 
 **DoD**
-- [ ] Training job runs end-to-end from Terraform-defined infrastructure
-- [ ] Execution role scoped by ARN, no wildcards
-- [ ] ECR repository with an explicit image tagging scheme
-- [ ] Model artifact in S3, versioned, with a lifecycle policy
-- [ ] Baseline metric recorded — the number Phase 13 will measure degradation against
-- [ ] The "no VPC" decision documented with its cost reasoning
+- [x] Execution role scoped by ARN **and by prefix** — `s3:ListBucket` is a
+      bucket-level action, so the prefix had to be a condition or the grant
+      quietly became "list the whole bucket". No `s3:DeleteObject` anywhere
+- [x] ECR repository with an explicit image tagging scheme — immutable,
+      `<semver>-<sha>`, referenced by nothing until Phase 12
+- [x] Model artifact in S3, versioned, with a lifecycle policy — to Standard-IA
+      at 90 days, **never expired**: Phase 9 registers versions that point at
+      these objects and Phase 13 compares against champions that may be months
+      old
+- [x] The "no VPC" decision documented with its cost reasoning
+- [x] Split, metric and class weighting unit-verified without Spark, SageMaker
+      or AWS
+- [ ] **Training job runs end-to-end** — deferred with the rest of the wake-up.
+      It needs the Phase 7 apply, the full 4.4 GB load and the Gold chain over
+      it. The command is one line and is recorded below
+- [ ] **Baseline metric recorded** — the number Phase 13 measures against. It
+      cannot exist before a run does, and inventing a placeholder would be worse
+      than an empty box
+
+**Running it, once the data is there**
+
+```bash
+cd terraform/envs/crypto && terraform output
+python3 ml/training/launch_training.py \
+  --role-arn         "$(terraform -chdir=terraform/envs/crypto output -raw sagemaker_execution_role_arn)" \
+  --training-data-uri "$(terraform -chdir=terraform/envs/crypto output -raw training_data_uri)" \
+  --artifacts-bucket crypto-artifacts-913524903233 \
+  --wait
+```
+
+Cost of one run: an `ml.m5.xlarge` is ~$0.23/hour and the job is bounded at two
+hours by `MaxRuntimeInSeconds`, so the ceiling is about **$0.46** and the
+expected cost is well under that. Bounded deliberately — an unbounded training
+job is an unbounded bill, in an account shared with other projects.
 
 **Prompt to run**
 
