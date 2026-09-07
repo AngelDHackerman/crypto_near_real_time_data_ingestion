@@ -229,6 +229,30 @@ module "orchestration" {
 }
 
 # -----------------------------------------------------------------------------
+# ML -- the durable half of the model lifecycle (Phase 8): the SageMaker
+# execution role and the training image repository.
+#
+# The training JOB is not here and is not a Terraform resource. It is an
+# execution, not a desired state; ml/training/launch_training.py owns it. Same
+# boundary Phase 7 drew around the backfill.
+# -----------------------------------------------------------------------------
+module "ml" {
+  source = "../../modules/ml"
+
+  project     = var.project
+  environment = var.environment
+  tags        = var.tags
+
+  gold_bucket_arn = module.storage.gold_bucket_arn
+  gold_ml_prefix  = var.gold_ml_prefix
+
+  artifacts_bucket_arn = module.storage.artifacts_bucket_arn
+  artifacts_bucket_id  = module.storage.artifacts_bucket_id
+  ml_code_prefix       = var.ml_code_prefix
+  ml_model_prefix      = var.ml_model_prefix
+}
+
+# -----------------------------------------------------------------------------
 # Observability -- failure detection and alerting.
 # -----------------------------------------------------------------------------
 module "observability" {

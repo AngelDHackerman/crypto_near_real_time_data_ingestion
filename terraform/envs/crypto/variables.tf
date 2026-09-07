@@ -297,3 +297,16 @@ variable "label_threshold_bps" {
   type        = number
   default     = 20
 }
+
+# --- Phase 8 -----------------------------------------------------------------
+variable "ml_code_prefix" {
+  description = "Prefix in the artifacts bucket for packaged training source directories, one per training job. Keyed by job name rather than overwritten, because a model's provenance has to stay fetchable for as long as the model does -- Phase 9 registers versions that point at it."
+  type        = string
+  default     = "ml/code"
+}
+
+variable "ml_model_prefix" {
+  description = "Prefix in the artifacts bucket where SageMaker writes model artifacts. In artifacts and not gold: a model is not lake data, which is the standing rule from Phase 2.1."
+  type        = string
+  default     = "ml/models"
+}

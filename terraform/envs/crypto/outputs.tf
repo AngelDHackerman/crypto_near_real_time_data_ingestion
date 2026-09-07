@@ -108,3 +108,24 @@ output "alerts_topic_arn" {
   description = "SNS topic carrying pipeline failure alerts."
   value       = module.observability.alerts_topic_arn
 }
+
+# --- Phase 8 -----------------------------------------------------------------
+output "sagemaker_execution_role_arn" {
+  description = "Role the training job assumes. Feed to ml/training/launch_training.py --role-arn."
+  value       = module.ml.sagemaker_execution_role_arn
+}
+
+output "training_data_uri" {
+  description = "The labelled dataset the training job reads. --training-data-uri."
+  value       = "s3://${module.storage.gold_bucket_id}/${var.gold_ml_prefix}/"
+}
+
+output "model_output_uri" {
+  description = "Where model artifacts land."
+  value       = module.ml.model_output_uri
+}
+
+output "training_image_repository_url" {
+  description = "ECR repository for the training image. Empty until Phase 12, and referenced by nothing until then -- deliberately, so it cannot become the wake-up blocker Phase 5's empty repository did."
+  value       = module.ml.training_image_repository_url
+}

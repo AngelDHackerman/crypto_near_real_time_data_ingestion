@@ -293,6 +293,35 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
     }
   }
 
+  # Model artifacts (roadmap.md, Phase 8). SageMaker writes one object per
+  # training job under ml/models/<job-name>/output/, so these keys are never
+  # overwritten and the bucket-wide noncurrent-version rule above never applies
+  # to them -- they would otherwise be kept in Standard forever.
+  #
+  # NOT expired, at any age. Phase 9 registers model versions that point at
+  # these objects and Phase 13 compares a challenger against a champion that may
+  # be months old; deleting the artifact would leave a registry entry describing
+  # a model that no longer exists. Moved to Standard-IA instead: a promoted
+  # model is read at deploy time and then rarely, which is exactly the access
+  # pattern Standard-IA is priced for, and it stays instantly retrievable.
+  rule {
+    id     = "ml-models-to-standard-ia"
+    status = "Enabled"
+
+    filter {
+      prefix = "ml/models/"
+    }
+
+    transition {
+      days          = 90
+      storage_class = "STANDARD_IA"
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
   # Spark scratch. Glue writes here on every run and never cleans up.
   rule {
     id     = "delete-spark-scratch"
