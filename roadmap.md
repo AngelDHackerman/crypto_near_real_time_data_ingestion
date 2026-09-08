@@ -114,7 +114,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 7 | Feature engineering | ✅ Done | `phase-7/feature-engineering` | **16 added, 8 changed, 0 destroyed**. Backfill job rehearsed against the live archive and real S3; indicator maths is one SQL file verified by 13 tests on DuckDB, no Spark needed. `source` promoted to a partition key. Gold catalog migrated out of hand-run DDL, which found an 11-id projection hiding 40 assets. Full 4.4 GB load and the overlap check wait for the apply and the wake-up |
 | 8 | Model training | ✅ Done | `phase-8/model-training` | 5 resources, all free. XGBoost binary classifier on AWS's managed container, pinned — the ECR repo exists but **nothing references it**, applying Phase 5's lesson rather than repeating it. Purged time split with an embargo, PR-AUC quoted against the positive rate. 16 more tests, no Spark or AWS needed. The run itself and the baseline metric wait for data |
 | 9 | Model registry | ✅ Done | `phase-9/model-registry` | 2 resources, both free. The promotion RULE is a pure function with 13 tests -- margin over champion, absolute floor, minimum validation rows, and a hard block when the label or feature version changed, because then the numbers are not comparable. Registering two real versions waits for data |
-| 10 | Serving / inference | ⬜ Not started | | |
+| 10 | Serving / inference | ✅ Done | `phase-10/serving-inference` | **0 resources added** — all gated. Forcing the flag plans 30, so the gated path is verified rather than assumed. Serverless (no VPC: serverless inference cannot take one, and the provisioned alternative is ~3x the whole project's cost). Inference recomputes features from the SAME indicators.sql on DuckDB, pinned to the tested version, which is what removes training/serving skew by construction. 10 more tests |
 | 11 | Monitoring & alerting (SNS refactor) | ⬜ Not started | | |
 | 12 | Containerization + GitHub Actions CI/CD | ⬜ Not started | | Learn in depth, do not delegate |
 | 13 | Model feedback loop | ⬜ Not started | | **Main goal of the project** |
@@ -1781,23 +1781,119 @@ attached in one line when the role exists. An unattached policy grants nothing.
 
 ---
 
-## Phase 10 — Serving / inference
+## Phase 10 — Serving / inference ✅
 
-**Scope**
+**Goal:** turn a symbol into a scored signal, without an always-on bill.
 
-- `aws_sagemaker_model` → `aws_sagemaker_endpoint_configuration` →
-  `aws_sagemaker_endpoint`.
-- Serverless inference preferred, consistent with the Phase 8 no-VPC decision and
-  to avoid an always-on endpoint bill.
-- If a VPC is ever justified for serving (a private endpoint has a real argument,
-  unlike training), it goes here — no NAT, S3 gateway endpoint plus the needed
-  interface endpoints, using a pinned public VPC module.
+**Applied:** *pending Angel's apply.* Phase 10 adds **zero resources to the
+current plan** — everything is behind `serving_enabled = false`. Verified not to
+be vapour: planning with the flag forced true renders **30 added, 9 changed, 0
+destroyed**, so the gated path is real code that Terraform can build rather than
+configuration nobody has ever evaluated.
+
+---
+
+### The gate here protects the apply, not the bill
+
+Worth stating because in `tfvars` it looks identical to `streaming_enabled`, and
+it is a different kind of switch. `streaming_enabled` guards a **recurring
+bill** — a Kinesis shard costs $10.95/month from creation. This one guards the
+**apply**: an `aws_sagemaker_model` requires a real model artifact, so `true`
+before a training run has produced one fails the plan rather than creating
+something expensive. Serverless inference itself is **$0 at rest**.
+
+**Two preconditions are written down rather than left to be discovered**, which
+is the lesson from Phase 5's unbuilt producer image:
+
+1. a promoted model package ARN, from `ml/registry/promote_model.py`
+2. the DuckDB Lambda layer built — `serving/inference/build_layer.sh`
+
+### The VPC question the roadmap parked here, answered
+
+Phase 8 said the argument for a VPC is genuinely stronger for serving than for
+training. Having got here the answer is still no, and the first reason is a fact
+rather than a preference: **SageMaker Serverless Inference does not support
+`VpcConfig` at all.** So the choice is not "serverless, with or without a VPC":
+
+| | Cost | |
+|---|---|---|
+| Serverless, no VPC | **$0 at rest**, per-request | 1–3 s cold start |
+| Provisioned in a VPC | ~$50/month always-on, **plus** a NAT Gateway or four interface endpoints | no cold start |
+
+The second is roughly **triple the entire awake project's cost, permanently**,
+to serve a demonstration endpoint.
+
+And it is worth being precise about what it would buy, because "private
+endpoint" sounds like more than it is here. **A SageMaker endpoint is not a
+public URL.** It is an AWS API reached through `InvokeEndpoint`, authenticated
+with SigV4 and authorised by IAM — there is no anonymous access to remove. A VPC
+endpoint changes the *network path*: it keeps traffic off the public internet
+and lets a security group and an endpoint policy constrain who can reach it,
+which is a real control against a compromised-credential exfiltration path, and
+not the "otherwise anyone could call it" the phrase usually implies.
+
+For one caller in an account with a $40 budget, that is not worth triple the
+running cost. If this ever served real signals to real money the calculation
+changes, and the change is a provisioned endpoint config with a `VpcConfig`
+block — which is why the decision is recorded rather than left as an absence.
+
+### Inference recomputes features; it does not read the Gold table
+
+This is the claim Phase 7's daily-cadence argument rests on, so it had to be
+built rather than asserted. The Lambda pulls the last ~50 hours of 1-minute bars
+from Silver, runs **`indicators.sql` — the same file, through the same expander
+— on DuckDB**, and scores the newest row.
+
+**That is also the answer to training/serving skew.** The classic way a model
+degrades unnoticed is that served features differ subtly from trained ones: a
+different window convention, a different null policy. It is subtle by
+definition — if it were obvious the model would fail loudly instead of quietly
+getting worse. Here there is no synchronisation to maintain, because there is
+one file. Phase 7 wrote the maths as SQL for the testing argument; this is the
+second thing that buys.
+
+The residual risk is *engine* semantics rather than definition drift, and it is
+bounded two ways: `tests/test_indicators.py` checks the DuckDB side against an
+independent implementation, and **the DuckDB version in the Lambda layer is
+pinned to the version the tests run on** (1.2.2). Serving on a different version
+than the tested one is training/serving skew with extra steps.
+
+**A missing feature is an error, never a zero.** XGBoost accepts a row of NaNs
+and returns a confident number, so a symbol whose recent history is too thin
+raises `InsufficientHistory` and returns **422** — the service is fine, this
+symbol cannot be scored, and a retry will not help. Keeping that distinct from a
+500 is what will keep Phase 11's alarms meaningful. A flat stablecoin lands here
+too, by design: its RSI and Bollinger position are null (`feature_schema.md`),
+which is correct for a table and unusable for a scoring request.
+
+`serving/inference/feature_request.py` has **10 tests** that build real Parquet
+with DuckDB rather than mocking the reader — which is how the test suite covers
+a detail a mock would have hidden: `source` is a *partition key* in Silver, so
+it is in the S3 path and never in the file. Including a symbol allow-list test,
+because DuckDB cannot take a prepared parameter inside `CREATE VIEW` and the
+symbol arrives in a request payload.
+
+### Latency is measured by a script, because a gate needs a number
+
+`serving/inference/measure_latency.py` reports **cold and warm separately** — a
+serverless endpoint's first request after idle pays 1–3 s of container start,
+and averaging that into a p95 produces a number describing neither state. The
+gate is on the warm p95; the cold number is printed beside it because a system
+that idles between signals experiences it too. It also reports the **per-stage**
+p95 the handler returns, since a regression in S3, in the feature query and in
+the model have completely different fixes.
 
 **DoD**
-- [ ] Endpoint responds to an inference request
-- [ ] Serverless (or the always-on cost explicitly accepted and written down)
-- [ ] Latency measured and recorded — Phase 13's CI/CD gates against it
-- [ ] Endpoint fully defined in Terraform
+- [x] Endpoint fully defined in Terraform — model → endpoint config → endpoint,
+      deployed from a **registry version** rather than an S3 URI plus a
+      hand-copied image name
+- [x] Serverless, with the always-on alternative costed and rejected in writing
+- [x] The serving path implemented and unit-tested without AWS
+- [ ] **Endpoint responds to an inference request** — needs a trained,
+      registered, promoted model. Deferred with the rest of the wake-up
+- [ ] **Latency measured and recorded** — the tool exists and the promotion gate
+      that consumes it exists and is switched off until there is a number.
+      Deliberately *not asserted* rather than assumed to pass
 
 **Prompt to run**
 
