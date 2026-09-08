@@ -28,3 +28,14 @@ output "model_promotion_policy_arn" {
   description = "IAM policy granting exactly what the registry scripts call. Attached to nothing until Phase 12's CI role exists -- guessing that role's trust policy now would be worse than leaving it unattached."
   value       = aws_iam_policy.model_promotion.arn
 }
+
+# --- Phase 10 alarm targets ---------------------------------------------------
+output "endpoint_name" {
+  description = "SageMaker endpoint name, or empty while serving is gated off. modules/observability gates its alarms on the same flag, so the alarm cannot outlive the endpoint."
+  value       = var.serving_enabled ? aws_sagemaker_endpoint.signal[0].name : ""
+}
+
+output "inference_function_name" {
+  description = "Inference Lambda name, or empty while serving is gated off."
+  value       = var.serving_enabled ? aws_lambda_function.inference[0].function_name : ""
+}

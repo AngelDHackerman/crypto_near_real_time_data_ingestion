@@ -310,3 +310,52 @@ variable "ml_model_prefix" {
   type        = string
   default     = "ml/models"
 }
+
+# --- Phase 10 ----------------------------------------------------------------
+variable "serving_enabled" {
+  description = <<-EOT
+    Gate for the inference path: the SageMaker model, its endpoint config, the
+    serverless endpoint, and the Lambda that turns a symbol into a score.
+
+    A different KIND of gate from streaming_enabled, and the difference matters
+    when reading tfvars. streaming_enabled guards a recurring bill -- a Kinesis
+    shard costs $10.95/month from creation. This one guards the APPLY: an
+    aws_sagemaker_model requires a real model artifact, so setting it true
+    before a training run has produced one fails the plan rather than creating
+    something expensive. Serverless inference itself is $0 at rest.
+
+    TWO PRECONDITIONS before this can be true:
+      1. a promoted model package ARN in model_package_arn, from
+         ml/registry/promote_model.py
+      2. the DuckDB Lambda layer built -- serving/inference/build_layer.sh
+    Both are stated here rather than discovered later, which is the lesson from
+    Phase 5's unbuilt producer image.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "model_package_arn" {
+  description = "The registry version to serve. Empty while serving is gated off. Comes from the registry rather than from a hand-copied S3 URI, so the deployed model's metrics stay recoverable."
+  type        = string
+  default     = ""
+}
+
+# --- Phase 11 ----------------------------------------------------------------
+variable "slack_enabled" {
+  description = <<-EOT
+    Whether model signals are delivered to Slack.
+
+    A THIRD kind of gate, and worth distinguishing from the other two in tfvars:
+    streaming_enabled guards a recurring bill, serving_enabled guards an apply
+    that would fail, and this one guards a CREDENTIAL. The Lambda and the secret
+    are free; what does not exist yet is the webhook URL.
+
+    Setting it true before the secret holds a real webhook creates a
+    subscription that fails on every message, which surfaces as a Lambda error
+    rather than as "nobody pasted the value". So: set the secret first, by hand,
+    then flip this.
+  EOT
+  type        = bool
+  default     = false
+}

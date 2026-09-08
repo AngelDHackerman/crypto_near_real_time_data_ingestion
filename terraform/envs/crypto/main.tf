@@ -222,7 +222,7 @@ module "orchestration" {
   # reads the state machine ARN -- which is fine: Terraform's graph is built
   # over RESOURCES, not modules, and the topic, the machine and the failure
   # rule form a chain, not a cycle.
-  sns_topic_arn = module.observability.alerts_topic_arn
+  sns_topic_arn = module.observability.ops_topic_arn
 
   daily_schedule_cron    = var.sfn_daily_schedule_cron
   daily_schedule_enabled = var.sfn_daily_schedule_enabled
@@ -250,6 +250,22 @@ module "ml" {
   artifacts_bucket_id  = module.storage.artifacts_bucket_id
   ml_code_prefix       = var.ml_code_prefix
   ml_model_prefix      = var.ml_model_prefix
+
+  # --- serving (Phase 10) ---------------------------------------------------
+  # Gated off, and here the gate protects the APPLY before the bill: an
+  # aws_sagemaker_model needs a real artifact, so `true` with no training run
+  # behind it fails rather than costs. Serverless inference is $0 at rest.
+  serving_enabled   = var.serving_enabled
+  model_package_arn = var.model_package_arn
+
+  silver_bucket_arn    = module.storage.silver_bucket_arn
+  silver_bucket_id     = module.storage.silver_bucket_id
+  silver_klines_prefix = "${var.silver_streaming_prefix}/klines"
+
+  duckdb_layer_dir          = "${local.repo_root}/serving/inference/build/layer"
+  inference_source_dir      = "${local.repo_root}/serving/inference"
+  indicator_sql_module_path = "${local.repo_root}/glue_jobs_silver_gold/gold/indicator_sql.py"
+  inference_build_path      = "${local.repo_root}/serving/inference/build/inference_lambda.zip"
 }
 
 # -----------------------------------------------------------------------------
@@ -259,9 +275,30 @@ module "observability" {
   source = "../../modules/observability"
 
   environment       = var.environment
+  aws_account_id    = var.aws_account_id
+  tags              = var.tags
   sns_email         = var.sns_email
   state_machine_arn = module.orchestration.state_machine_arn
 
   # Phase 5: a cost guard, in place BEFORE the streaming gate is ever opened.
   monthly_budget_usd = var.monthly_budget_usd
+
+  # --- Phase 11 -------------------------------------------------------------
+  # Every alarm target comes from the module that owns the resource, not from
+  # tfvars -- the same one-owner-per-fact rule the Glue job names follow. The
+  # two gates are mirrored so an alarm cannot outlive the thing it watches.
+  extractor_function_name = module.ingestion.lambda_function_name
+
+  streaming_enabled     = var.streaming_enabled
+  producer_cluster_name = module.ingestion.producer_cluster_name
+  producer_service_name = module.ingestion.producer_service_name
+  firehose_stream_name  = module.ingestion.firehose_stream_name
+
+  serving_enabled         = var.serving_enabled
+  endpoint_name           = module.ml.endpoint_name
+  inference_function_name = module.ml.inference_function_name
+
+  slack_enabled              = var.slack_enabled
+  slack_notifier_source_file = "${local.repo_root}/slack_notifier_lambda/app.py"
+  slack_notifier_build_path  = "${local.repo_root}/slack_notifier_lambda/build/slack_notifier.zip"
 }

@@ -15,35 +15,13 @@
 #      into -ops-alerts and -model-signals before the email becomes noise.
 # =============================================================================
 
-# If StateFunctions run fails, send alert about failure
-# 1) SNS topic + suscripción
-resource "aws_sns_topic" "sfn_alerts" {
-  name = "near-real-time-crypto-sfn-alerts-${var.environment}"
-}
-
-resource "aws_sns_topic_subscription" "sfn_alerts_email" {
-  topic_arn = aws_sns_topic.sfn_alerts.arn
-  protocol  = "email"
-  endpoint  = var.sns_email
-}
-
-# Permitir a EventBridge publicar en el topic
-data "aws_iam_policy_document" "sns_topic_policy" {
-  statement {
-    sid    = "AllowEventsToPublish"
-    effect = "Allow"
-    principals {
-      type        = "Service"
-      identifiers = ["events.amazonaws.com"]
-    }
-    actions   = ["SNS:Publish"]
-    resources = [aws_sns_topic.sfn_alerts.arn]
-  }
-}
-resource "aws_sns_topic_policy" "sfn_alerts_policy" {
-  arn    = aws_sns_topic.sfn_alerts.arn
-  policy = data.aws_iam_policy_document.sns_topic_policy.json
-}
+# PHASE 11 MOVED THE TOPICS OUT OF THIS FILE. What used to sit here -- one
+# aws_sns_topic named `...-sfn-alerts-crypto`, its email subscription and a
+# policy allowing only events.amazonaws.com -- is replaced by two topics split
+# by audience in topics.tf, with a policy that admits every principal that
+# actually publishes and an aws:SourceAccount condition so that admission is
+# not account-wide. The reasoning, and the two destroys it costs, are in that
+# file's header.
 
 #2) EventBridge rule that detects failed state machine executions
 resource "aws_cloudwatch_event_rule" "sfn_failed" {
@@ -66,7 +44,7 @@ resource "aws_cloudwatch_event_rule" "sfn_failed" {
 # 3) Target: SNS
 resource "aws_cloudwatch_event_target" "sfn_failed_to_sns" {
   rule = aws_cloudwatch_event_rule.sfn_failed.name
-  arn  = aws_sns_topic.sfn_alerts.arn
+  arn  = aws_sns_topic.ops_alerts.arn
 
   # Was "terraform-20251012021255924500000001". See the note in
   # modules/ingestion/main.tf -- pinned for the Phase 1 import, readable now.
@@ -91,11 +69,18 @@ resource "aws_cloudwatch_event_target" "sfn_failed_to_sns" {
 #      This project's first ground rule is that clicking in the console is never
 #      the answer; a control that silently depends on a click is worse than none.
 #
-#   2. It notifies by email DIRECTLY, not through the SNS topic above. That
-#      dodges the known defect documented at the top of this file: the topic
-#      policy allows only events.amazonaws.com to publish, so a notification
-#      arriving as budgets.amazonaws.com would be dropped SILENTLY. Phase 11
-#      fixes the topic; until it does, the cost guard does not depend on it.
+#   2. It notifies by email DIRECTLY rather than through SNS. That began as a
+#      way around the defect Phase 11 has now fixed -- the old topic policy
+#      allowed only events.amazonaws.com, so a budgets.amazonaws.com publish was
+#      dropped SILENTLY. budgets.amazonaws.com is an accepted publisher on the
+#      ops topic now, so this COULD be routed through it.
+#
+#      It deliberately is not. A cost guard that depends on the alerting stack
+#      cannot report that the alerting stack is the thing costing money, and
+#      SNS, Lambda and the topic policy are all things this project changes.
+#      The one control that says "the bill is wrong" should have the fewest
+#      moving parts between it and a human, so it keeps its own channel. That is
+#      no longer a workaround; it is the design.
 #
 # Scope is the whole account, not this project -- account 913524903233 is shared
 # with other projects, so an account-wide budget is the one that catches "some

@@ -104,9 +104,22 @@ output "state_machine_arn" {
   value       = module.orchestration.state_machine_arn
 }
 
-output "alerts_topic_arn" {
-  description = "SNS topic carrying pipeline failure alerts."
-  value       = module.observability.alerts_topic_arn
+# Phase 11 split the single topic in two, so this output is two outputs. The
+# name `alerts_topic_arn` is gone rather than kept pointing at one half: it
+# would have quietly become the answer to a question nobody asked any more.
+output "ops_topic_arn" {
+  description = "Operational alerts -- pipeline failures, Lambda errors, producer liveness. Email."
+  value       = module.observability.ops_topic_arn
+}
+
+output "signals_topic_arn" {
+  description = "Model signals. Slack once slack_enabled and the webhook secret is set."
+  value       = module.observability.signals_topic_arn
+}
+
+output "slack_webhook_secret_arn" {
+  description = "Paste the Slack incoming webhook here BEFORE setting slack_enabled = true. Terraform owns the container, a human owns the contents."
+  value       = module.observability.slack_webhook_secret_arn
 }
 
 # --- Phase 8 -----------------------------------------------------------------
