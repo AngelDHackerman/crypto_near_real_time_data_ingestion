@@ -66,14 +66,25 @@ defaulting to off, and a gate is `count = 0` when the resource bills merely by
 existing — a disabled schedule is free, a created shard is not. Three flags
 carry this today, all `false`:
 
-| Flag | Gates | Cost when open |
-|---|---|---:|
-| `eventbridge_rule_enabled` | the CMC extractor's schedule | ~$0 (CMC free tier) |
-| `sfn_daily_schedule_enabled` | the daily Silver → Gold schedule, i.e. five Glue job runs a day | Glue DPU-hours per run |
-| `streaming_enabled` | the Kinesis stream, the Firehose delivery stream, the producer's `desired_count` | ~$25/mo |
+| Flag | Gates | Cost when open | Guards |
+|---|---|---:|---|
+| `eventbridge_rule_enabled` | the CMC extractor's schedule | ~$0 (CMC free tier) | a bill |
+| `sfn_daily_schedule_enabled` | the daily Silver → Gold schedule, now **six** Glue job runs a day | Glue DPU-hours per run | a bill |
+| `streaming_enabled` | the Kinesis stream, the Firehose delivery stream, the producer's `desired_count` | ~$25/mo | a bill |
+| `serving_enabled` | the SageMaker model, endpoint config, endpoint and inference Lambda | **$0 at rest** (serverless, per-request) | **an apply that would fail** |
+| `slack_enabled` | the Slack notifier Lambda and its SNS subscription | $0 | **a credential that does not exist** |
 
-The middle one is new in Phase 6, and it is a gap being closed rather than a
-feature. That rule had **no `state` in Terraform at all**: the fact that the
+**The last two are not cost gates, and reading them as such is a mistake this
+table exists to prevent.** `serving_enabled = true` does not start a bill —
+serverless inference costs nothing at rest — it fails the apply, because an
+`aws_sagemaker_model` requires a model artifact that no training run has
+produced yet. `slack_enabled = true` costs nothing either; it creates a
+subscription that fails on every message until a human pastes a webhook into
+Secrets Manager. Three different reasons a flag defaults to false, and only one
+of them is money.
+
+`sfn_daily_schedule_enabled` is new in Phase 6, and it was a gap being closed
+rather than a feature. That rule had **no `state` in Terraform at all**: the fact that the
 daily pipeline was switched off lived in the AWS console and was asserted
 nowhere in this repository. A dormancy that only the console knows about is one
 apply away from ending.
@@ -85,13 +96,31 @@ roles, ECR repositories, task definitions, log groups, Glue jobs, the state mach
 Waking up is flipping those flags, deliberately and as code, never by clicking in
 the console. Until that moment the correct state of this project is **asleep**.
 
-**One precondition stands between the flags and a working wake-up.** Phase 5 built
-the ECR repository and a task definition that pulls `:latest`, but **the producer
-image has never been built and the repository is empty** — so flipping
-`streaming_enabled` today starts a task that dies on `CannotPullContainerError`.
-Closing it is Phase 12's job, where the CI/CD pipeline builds that image anyway.
-Recorded in both places because an implicit precondition is one you discover on
+**Preconditions standing between the flags and a working wake-up.** Each is
+recorded in two places, because an implicit precondition is one you discover on
 the day it blocks you.
+
+1. **The producer image has never been built and its ECR repository is empty**
+   (Phase 5). Flipping `streaming_enabled` today starts a task that dies on
+   `CannotPullContainerError`. Phase 12's CI/CD pipeline builds that image
+   anyway. **This is the only one that blocks the ingestion wake-up.**
+2. **The full 4.4 GB backfill has not run** (Phase 7). The job is built and
+   rehearsed on four asset-months against the live archive; the full load needs
+   the apply first, takes hours, and is the one part of Phases 7–11 that costs
+   real money — a few dollars of FLEX Glue, ~$0.15/month of S3.
+3. **No model exists**, so `serving_enabled` cannot be true (Phases 8–10).
+   Training → registry → promotion, in that order; the scripts and their
+   decision rules are written and tested.
+4. **The Slack webhook and the DuckDB Lambda layer** (Phases 10–11). One is a
+   paste into Secrets Manager, the other is `serving/inference/build_layer.sh`.
+5. **The new ops-alerts email subscription needs confirming** (Phase 11). AWS
+   cannot confirm one on anyone's behalf, and the destroyed topic's confirmation
+   does not transfer.
+
+Phases 8 through 11 add **nothing to the recurring bill**: an IAM role, an empty
+ECR repository, a model package group, two SNS topics, three CloudWatch alarms
+inside the free tier, and a Secrets Manager secret. The lake is fully built, the
+ML half is fully built, and both are asleep.
 
 Phase 3 deliberately did not wake anything, and this was checked rather than
 assumed: all three rules were re-read from AWS after the apply and are still
@@ -115,7 +144,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 8 | Model training | ✅ Done | `phase-8/model-training` | 5 resources, all free. XGBoost binary classifier on AWS's managed container, pinned — the ECR repo exists but **nothing references it**, applying Phase 5's lesson rather than repeating it. Purged time split with an embargo, PR-AUC quoted against the positive rate. 16 more tests, no Spark or AWS needed. The run itself and the baseline metric wait for data |
 | 9 | Model registry | ✅ Done | `phase-9/model-registry` | 2 resources, both free. The promotion RULE is a pure function with 13 tests -- margin over champion, absolute floor, minimum validation rows, and a hard block when the label or feature version changed, because then the numbers are not comparable. Registering two real versions waits for data |
 | 10 | Serving / inference | ✅ Done | `phase-10/serving-inference` | **0 resources added** — all gated. Forcing the flag plans 30, so the gated path is verified rather than assumed. Serverless (no VPC: serverless inference cannot take one, and the provisioned alternative is ~3x the whole project's cost). Inference recomputes features from the SAME indicators.sql on DuckDB, pinned to the tested version, which is what removes training/serving skew by construction. 10 more tests |
-| 11 | Monitoring & alerting (SNS refactor) | ⬜ Not started | | |
+| 11 | Monitoring & alerting (SNS refactor) | ✅ Done | `phase-11/monitoring-alerting` | **33 added, 10 changed, 3 destroyed** — the destroys are the old topic, its policy and its confirmed email subscription, so there is one confirmation email to click. The policy fix was a precondition, not a cleanup: no alarm in this phase could have published. Added an `aws:SourceAccount` condition the original finding did not ask for. Model Monitor declined with reasons; data capture enabled, which hands Phase 13 its prediction log |
 | 12 | Containerization + GitHub Actions CI/CD | ⬜ Not started | | Learn in depth, do not delegate |
 | 13 | Model feedback loop | ⬜ Not started | | **Main goal of the project** |
 
@@ -1903,36 +1932,154 @@ the model have completely different fixes.
 
 ---
 
-## Phase 11 — Monitoring & alerting
+## Phase 11 — Monitoring & alerting ✅
 
-**Goal:** alerting as code, and fix what the Phase 0 review found in the current
-SNS setup.
+**Goal:** alerting as code, and fix what the Phase 0 review found.
 
-**Findings to fix**
+**Applied:** *pending Angel's apply.* Cumulative plan **33 added, 10 changed,
+3 destroyed**. The three destroys are the old SNS topic, its policy and its
+email subscription — expected, and the reason is below.
 
-- **The topic policy only allows `events.amazonaws.com` to publish.** When
-  CloudWatch alarms are added for buy/sell signals and model drift, they will
-  publish as `cloudwatch.amazonaws.com` and **silently fail**. This will cost
-  debugging time if not fixed up front.
-- **One topic mixes two audiences.** "Pipeline failed" (operational) and "buy
-  signal on BTC" (business) in the same topic means the email subscription becomes
-  noise and gets ignored. Split into `-ops-alerts` and `-model-signals`.
-- The existing email subscription (`angeldariaux@gmail.com`) is confirmed and now
-  imported into state. Revisit whether email is the right channel for signals —
-  SNS → Lambda → Slack webhook demos far better than an inbox.
+---
 
-**Scope**
+### The policy defect was worse than it was written down as
 
-- `aws_cloudwatch_metric_alarm` + the split SNS topics, all in Terraform.
-- Evaluate SageMaker Model Monitor for production drift detection — the piece that
-  separates a "complete" portfolio project from one that merely predicts.
+Phase 3 recorded it as "CloudWatch alarms will publish as
+`cloudwatch.amazonaws.com` and **silently fail**". True, and the consequence is
+sharper than it reads: **no alarm added in this phase could have worked.** An
+SNS publish denied by a topic policy does not raise anywhere the caller can see.
+The alarm goes to `ALARM`, reports that it notified, and nobody is notified. It
+is not an error — it is a silence, and a silence in the alerting path is
+indistinguishable from "nothing is wrong".
+
+Phase 5 had already been forced to route around it: the budget's notifications
+go by email *directly* rather than through SNS.
+
+**And the fix adds something the original finding did not ask for.**
+`cloudwatch.amazonaws.com` is not *this account's* CloudWatch — it is the
+CloudWatch service, everywhere. Allowing it to publish with no condition lets an
+alarm in **any AWS account** publish to this topic; anyone who learns the ARN can
+page this project's owner at will. Every statement now carries an
+`aws:SourceAccount` condition. That is the confused-deputy problem, and it would
+have been introduced by the very change that fixed the first defect.
+
+### Two topics, and the destroys they cost
+
+`-ops-alerts` (email) and `-model-signals` (Slack). "The nightly pipeline
+failed" and "BTC crossed a threshold" are read by different people at different
+urgencies, and one arrives far more often — mixed into one inbox, the
+operational alert is the one that gets filtered.
+
+**An SNS topic name is ForceNew, so this destroys the existing topic and its
+CONFIRMED email subscription. After the apply there is a confirmation email to
+click.** Stated plainly because it is a manual step, and the moment to pay it is
+now: the project is dormant and nothing is publishing, so no alert can be lost
+in the window. Same reasoning Phase 6 used for its two renames.
+
+**The signals topic deliberately has no email fallback.** A fallback that
+duplicates every signal into the inbox recreates exactly the problem the split
+solves — and invisibly, because the Slack path would look healthy while messages
+kept arriving somewhere.
+
+### Slack, and why it needs a Lambda
+
+SNS can POST to an HTTPS endpoint and a Slack webhook is one, so the direct
+subscription looks tempting. It does not work: SNS sends its own JSON envelope,
+Slack expects `text` or `blocks`, Slack answers 400, SNS retries for an hour and
+gives up, and **nothing says the alert was lost**. Something has to translate.
+
+The webhook lives in **Secrets Manager**, not in an environment variable: it is
+a bearer credential — anyone holding it can post to the channel as this app — and
+a Lambda env var is readable by anyone with `lambda:GetFunction`, a much wider
+set of principals. Terraform owns the secret *container* and writes a
+placeholder; a human sets the value, exactly as with the CoinMarketCap key.
+`ignore_changes` on the version is what stops the next apply from silently
+restoring `REPLACE_ME`.
+
+**`slack_enabled` is a third kind of gate**, and the three are worth
+distinguishing since they look identical in tfvars:
+
+| Flag | Guards |
+|---|---|
+| `streaming_enabled` | a **recurring bill** — a Kinesis shard costs from creation |
+| `serving_enabled` | an **apply that would fail** — `aws_sagemaker_model` needs a real artifact |
+| `slack_enabled` | a **credential that does not exist yet** |
+
+**The notifier's own failures go to ops, by email.** Routing "Slack delivery is
+broken" through Slack is the one alert that cannot work.
+
+### The alarms, and the setting that decides whether they work
+
+Three exist while the project is dormant; the rest appear with the gate they
+belong to, so the alarm count tracks what is actually running. That is also a
+cost decision — the first 10 alarms per account are free and each one after is
+$0.10/month, in an account shared with other projects.
+
+**Every alarm sets `treat_missing_data` explicitly, and the value differs by
+what the metric means.** This is the setting that quietly decides whether an
+alarm is real:
+
+- **`notBreaching` for error counts.** No data means nothing failed. The default
+  (`missing`) would leave these in `INSUFFICIENT_DATA` forever on an idle
+  pipeline — which looks exactly like an alarm that is fine.
+- **`breaching` for liveness.** The producer alarm is the one that matters here:
+  a dead ECS service stops publishing `RunningTaskCount` altogether, so treating
+  absence as healthy would make it blind to precisely the outage it exists for.
+  **That is the defining failure of a streaming ingest** — nothing errors, the
+  WebSocket simply stops being read, and the first sign is a gap in a table
+  nobody queries for a week.
+
+The endpoint latency alarm uses **the same 500 ms** as Phase 9's promotion gate,
+on purpose: a model that would not be promoted today should not keep serving
+unnoticed.
+
+### SageMaker Model Monitor: evaluated, declined, and the useful half kept
+
+**Declined.** Model Monitor needs a scheduled Processing job — roughly
+**$7/month** at the smallest useful size, about a quarter of this project's
+entire awake cost — to watch an endpoint with one caller. And what it detects is
+**input drift**: has the feature distribution moved. Phase 13 builds something
+strictly stronger for this project's purpose — whether the predictions were
+actually **right**, measured against realised prices. Paying for a weaker proxy
+alongside it would be paying twice to learn less.
+
+**Data capture is turned on anyway**, and it is the part that pays. It is nearly
+free (S3 puts, no compute) and writes every request and response to S3, which is
+three things at once:
+
+1. **Phase 13's first DoD** — "signals persisted with timestamp and prediction"
+   — satisfied by the platform rather than by a table this project would
+   otherwise write and maintain.
+2. The ground-truth job's input: what was predicted, and when.
+3. **The option on Model Monitor, kept open.** Enabling it later needs history,
+   and history cannot be collected retroactively — which is exactly why this
+   belongs in Phase 11 and not in Phase 13.
+
+At 100%, not a sample: at this volume a sample saves nothing and would make the
+feedback loop's denominator an estimate.
 
 **DoD**
-- [ ] Two topics split by audience, each with the right subscribers
-- [ ] Topic policy permits every principal that actually needs to publish
-- [ ] A CloudWatch alarm verified to reach its destination end-to-end
-- [ ] Signal delivery channel decided (Slack vs email) and implemented
-- [ ] Model Monitor evaluated; decision recorded either way
+- [x] Two topics split by audience, each with the right subscribers
+- [x] Topic policy permits every principal that actually needs to publish — and
+      only from this account
+- [x] Metric alarms added, gated so they cannot outlive what they watch
+- [x] Signal channel decided and implemented: Slack for signals, email for ops
+- [x] Model Monitor evaluated; declined, with the reasoning, and data capture
+      enabled so the decision stays reversible
+- [ ] **An alarm verified to reach its destination end-to-end** — needs
+      something to alarm on. The pipeline is dormant and no alarm has ever
+      fired. It is the first thing to check at the wake-up, alongside the Athena
+      queries Phases 6 and 7 left written down
+
+**Two manual steps after the apply**, both consequences of decisions above
+rather than oversights:
+
+1. **Confirm the new ops-alerts email subscription** — AWS cannot confirm one on
+   anyone's behalf, and the old topic's confirmation does not transfer.
+2. **Paste the Slack webhook** into
+   `near-real-time-crypto-slack-webhook-crypto` in Secrets Manager, then set
+   `slack_enabled = true`. Until then the signals topic exists with no
+   subscriber, which is the correct state for a topic nothing publishes to yet.
 
 **Prompt to run**
 
@@ -2098,9 +2245,9 @@ phase. Each is tagged with where it gets resolved.
 | Widen `streaming_projection_start_date` when the backfill lands | Phase 7 ✅ | Defaults to `2026-09-01`. A row written OUTSIDE a projected `dt` range is INVISIBLE to Athena rather than an error, so the 2017 backfill must widen this in the SAME change that writes those rows, or it will look like the backfill silently did nothing |
 | The daily trigger may be the wrong grain over a stream | Phase 7 ✅ | Phase 6 left the state machine daily and added `SilverBinanceJob` to the chain. A stream feeding a once-a-day batch is a cadence question Phase 7 inherits, not a defect |
 | Phase 6 was written without AWS credentials | Phase 6 ✅ | Static checks only while writing it — `fmt`, `validate`, an ASL reachability check, a Python compile. Angel applied it on 2026-09-06 and the plan matched the predicted categories: 10 added, 4 changed, 10 destroyed, clean plan afterwards. The orphan Silver table did exist and had to be dropped first |
-| SNS topic policy blocks `cloudwatch.amazonaws.com` | Phase 11 | Alarms would fail silently |
-| Split SNS into ops vs signals topics | Phase 11 | |
-| Review the email subscription channel | Phase 11 | Slack webhook demos better |
+| SNS topic policy blocks `cloudwatch.amazonaws.com` | Phase 11 ✅ | Alarms would fail silently |
+| Split SNS into ops vs signals topics | Phase 11 ✅ | |
+| Review the email subscription channel | Phase 11 ✅ | Slack webhook demos better |
 | Step Functions has no `Catch` anywhere | Phase 6 ✅ | Every task catches to one `NotifyFailure` → SNS → `Fail`. Each catcher's `ResultPath` is `$.failure.<StateName>`, so the alert's JSON key IS the step that died |
 | Remove the crawler polling states | Phase 6 ✅ | Four states and ~3 min/run gone, plus a `Default` branch that looped forever on a FAILED crawl |
 | Split into two state machines | Phase 13 | Before the feedback loop makes it unreadable |
