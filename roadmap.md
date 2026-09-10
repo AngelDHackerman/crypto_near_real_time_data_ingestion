@@ -144,7 +144,7 @@ assumed: all three rules were re-read from AWS after the apply and are still
 | 8 | Model training | ✅ Done | `phase-8/model-training` | 5 resources, all free. XGBoost binary classifier on AWS's managed container, pinned — the ECR repo exists but **nothing references it**, applying Phase 5's lesson rather than repeating it. Purged time split with an embargo, PR-AUC quoted against the positive rate. 16 more tests, no Spark or AWS needed. The run itself and the baseline metric wait for data |
 | 9 | Model registry | ✅ Done | `phase-9/model-registry` | 2 resources, both free. The promotion RULE is a pure function with 13 tests -- margin over champion, absolute floor, minimum validation rows, and a hard block when the label or feature version changed, because then the numbers are not comparable. Registering two real versions waits for data |
 | 10 | Serving / inference | ✅ Done | `phase-10/serving-inference` | **0 resources added** — all gated. Forcing the flag plans 30, so the gated path is verified rather than assumed. Serverless (no VPC: serverless inference cannot take one, and the provisioned alternative is ~3x the whole project's cost). Inference recomputes features from the SAME indicators.sql on DuckDB, pinned to the tested version, which is what removes training/serving skew by construction. 10 more tests |
-| 11 | Monitoring & alerting (SNS refactor) | ✅ Done | `phase-11/monitoring-alerting` | **33 added, 10 changed, 3 destroyed** — the destroys are the old topic, its policy and its confirmed email subscription, so there is one confirmation email to click. The policy fix was a precondition, not a cleanup: no alarm in this phase could have published. Added an `aws:SourceAccount` condition the original finding did not ask for. Model Monitor declined with reasons; data capture enabled, which hands Phase 13 its prediction log |
+| 11 | Monitoring & alerting (SNS refactor) | ✅ Done | `phase-11/monitoring-alerting` | Applied 2026-09-09: **10 added, 4 changed, 3 destroyed** dormant, then **6 added** when `slack_enabled` flipped (the "33" this row used to claim counted every gate as open). The destroys are the old topic, its policy and its confirmed email subscription; the confirmation email was clicked. Both channels verified end-to-end — Slack by a manual publish, email by the notifier's own failure alarm. The policy fix was a precondition, not a cleanup: no alarm in this phase could have published. Added an `aws:SourceAccount` condition the original finding did not ask for. Model Monitor declined with reasons; data capture enabled, which hands Phase 13 its prediction log |
 | 12 | Containerization + GitHub Actions CI/CD | ⬜ Not started | | Learn in depth, do not delegate |
 | 13 | Model feedback loop | ⬜ Not started | | **Main goal of the project** |
 
@@ -1744,9 +1744,10 @@ job is an unbounded bill, in an account shared with other projects.
 
 **Goal:** version models, and make promotion a rule rather than a click.
 
-**Applied:** *pending Angel's apply.* Cumulative plan **23 added, 9 changed, 0
-destroyed**; Phase 9's own share is two resources, both free — a model package
-group and an unattached IAM policy.
+**Applied** 2026-09-08: Phase 9's own share, **2 added** — the model package
+group and the unattached IAM policy, both free. (The "23 added" this line used
+to quote was a cumulative plan across three phases; see Phase 11 for why that
+kind of number was misleading.)
 
 ---
 
@@ -1836,11 +1837,11 @@ attached in one line when the role exists. An unattached policy grants nothing.
 
 **Goal:** turn a symbol into a scored signal, without an always-on bill.
 
-**Applied:** *pending Angel's apply.* Phase 10 adds **zero resources to the
-current plan** — everything is behind `serving_enabled = false`. Verified not to
-be vapour: planning with the flag forced true renders **30 added, 9 changed, 0
-destroyed**, so the gated path is real code that Terraform can build rather than
-configuration nobody has ever evaluated.
+**Applied** 2026-09-09: **zero resources**, as designed — everything is behind
+`serving_enabled = false`, and the apply confirmed it by not creating a single
+one of them. Verified not to be vapour: planning with the flag forced true
+renders **30 added, 9 changed, 0 destroyed**, so the gated path is real code
+Terraform can build rather than configuration nobody has ever evaluated.
 
 ---
 
@@ -1958,9 +1959,19 @@ the model have completely different fixes.
 
 **Goal:** alerting as code, and fix what the Phase 0 review found.
 
-**Applied:** *pending Angel's apply.* Cumulative plan **33 added, 10 changed,
-3 destroyed**. The three destroys are the old SNS topic, its policy and its
-email subscription — expected, and the reason is below.
+**Applied** 2026-09-09, in two applies: **10 added, 4 changed, 3 destroyed**
+dormant, then **6 added** when `slack_enabled` flipped. The three destroys are
+the old SNS topic, its policy and its email subscription — expected, and the
+reason is below. `terraform plan` is clean.
+
+**The "33 added" this section used to promise was wrong, and the way it was
+wrong is worth keeping.** It counted every resource in the phase as if the
+three gates were open. With `streaming_enabled`, `serving_enabled` and
+`slack_enabled` all false, ~23 of those are not created and not even evaluated:
+the SageMaker endpoint and its Lambda, the 2 streaming alarms, the 3 serving
+alarms, the 7 of the Slack notifier. A cumulative count is a plan for a
+configuration that does not exist — the number that means anything is the one
+for the state the project is actually in, which is dormant.
 
 ---
 
@@ -2088,20 +2099,47 @@ feedback loop's denominator an estimate.
 - [x] Signal channel decided and implemented: Slack for signals, email for ops
 - [x] Model Monitor evaluated; declined, with the reasoning, and data capture
       enabled so the decision stays reversible
-- [ ] **An alarm verified to reach its destination end-to-end** — needs
-      something to alarm on. The pipeline is dormant and no alarm has ever
-      fired. It is the first thing to check at the wake-up, alongside the Athena
-      queries Phases 6 and 7 left written down
+- [x] **Both channels verified end-to-end**, and the second one by accident —
+      see below. This was the item expected to wait for the wake-up; it did not
+      have to.
 
-**Two manual steps after the apply**, both consequences of decisions above
-rather than oversights:
+### Both channels were verified, and the failure did the second half
 
-1. **Confirm the new ops-alerts email subscription** — AWS cannot confirm one on
-   anyone's behalf, and the old topic's confirmation does not transfer.
+The Slack path was verified deliberately: `aws sns publish` to the signals
+topic, and the payload arrived in `#crypto-signals` reshaped by the notifier.
+
+The ops path verified itself. The first two attempts failed — Slack answered
+`messages_tab_disabled`, because the webhook had been pointed at the app's DM
+rather than at the channel — the notifier raised, its Errors alarm crossed, and
+**the email arrived**. That is the design working: the one alert that cannot be
+routed through Slack is "Slack delivery is broken", and it wasn't.
+
+Two things were learned that no plan predicted, both now in the notifier's
+docstring and error path:
+
+1. **`str(HTTPError)` discards Slack's response body**, which is where the
+   reason lives. The log said "HTTP Error 500: Internal Server Error" and the
+   reason had to be recovered by replaying the POST by hand.
+2. **The webhook cache has no invalidation.** Pasting the corrected webhook did
+   not reach the warm container, so the secret was right and the Lambda kept
+   failing with the old URL. A rotation is two steps: set the secret, then force
+   new execution environments.
+
+**The two manual steps this phase owed — both done:**
+
+1. **Confirm the ops-alerts email subscription** — done; the subscription is
+   `Confirmed`, and the old topic's confirmation did not transfer, as expected.
 2. **Paste the Slack webhook** into
-   `near-real-time-crypto-slack-webhook-crypto` in Secrets Manager, then set
-   `slack_enabled = true`. Until then the signals topic exists with no
-   subscriber, which is the correct state for a topic nothing publishes to yet.
+   `near-real-time-crypto-slack-webhook-crypto`, then set `slack_enabled = true`
+   — done, in that order. The `ignore_changes` on the secret version held: the
+   apply that followed did not restore the placeholder.
+
+**What is NOT done, and is not a defect:** nothing publishes to the signals
+topic yet. Grep the repo and `signals_topic_arn` appears only as a Terraform
+output. The producers are Phase 10's inference path, once `serving_enabled`
+opens, and Phase 13's feedback loop. What Phase 11 built is the pipe and the
+credential, on purpose — the credential step is manual, and discovering it with
+a model already serving is the mistake Phase 5's unbuilt producer image taught.
 
 **Prompt to run**
 

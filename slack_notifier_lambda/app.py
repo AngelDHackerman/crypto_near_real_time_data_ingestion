@@ -22,12 +22,32 @@ WHY THE WEBHOOK IS IN SECRETS MANAGER
 
     Fetched once per container and cached: a warm invocation should not spend a
     Secrets Manager call, and Secrets Manager charges per 10,000 API calls.
+
+    THE CACHE HAS NO INVALIDATION, AND ROTATION IS WHERE THAT BITES. Pasting a
+    new webhook into the secret does not reach a container that is already warm
+    -- it keeps posting with the old URL until Lambda recycles it, which can be
+    minutes or hours. This cost a live debugging session at the Phase 11 apply:
+    the secret was correct, the direct POST returned 200, and the Lambda kept
+    failing, because the two were not talking to the same URL.
+
+    So a rotation is two steps, not one: set the secret, then force new
+    execution environments -- rewriting the function's configuration with
+    IDENTICAL values does it, and leaves no Terraform drift:
+
+        aws lambda update-function-configuration --function-name <fn> \
+            --environment "Variables={SLACK_WEBHOOK_SECRET_ARN=<same arn>}"
+
+    A TTL was considered and declined: it would spend a Secrets Manager call on
+    a schedule to fix a problem that happens by hand, roughly never, and it
+    would make the failure intermittent rather than absolute -- which is harder
+    to diagnose, not easier.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 
 import boto3
@@ -96,6 +116,21 @@ def handler(event, _context=None):
                     failed.append(f"slack returned {resp.status}")
                 else:
                     delivered += 1
+        except urllib.error.HTTPError as exc:
+            # Slack puts the ACTUAL reason in the response body, and str(exc)
+            # throws it away -- it yields "HTTP Error 500: Internal Server
+            # Error" and nothing else. The body says `messages_tab_disabled`,
+            # or `no_service`, or `channel_is_archived`: the difference between
+            # "someone pointed the webhook at a DM" and "someone revoked it".
+            #
+            # This is not hypothetical. The Phase 11 verification failed with a
+            # bare 500, and the reason had to be recovered by replaying the POST
+            # by hand from a laptop. The log should have said it the first time.
+            try:
+                detail = exc.read().decode("utf-8", "replace").strip()[:200]
+            except Exception:  # noqa: BLE001
+                detail = "<body unreadable>"
+            failed.append(f"HTTP {exc.code}: {detail or '<empty body>'}")
         except Exception as exc:  # noqa: BLE001
             failed.append(str(exc))
 
